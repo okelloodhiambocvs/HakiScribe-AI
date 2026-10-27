@@ -1,24 +1,29 @@
-# HakiScribe-AI 2.0 Architecture - Human-in-the-Loop
+# HakiScribe-AI Architecture - Human-in-the-Loop
 
-**Rule: AI proposes. HUMAN disposes.**
+Rule: AI proposes. HUMAN disposes.
 
-[Noisy Court Audio .mp3 - SYNTHETIC ONLY]
+[Synthetic Noisy Court Audio]
   |
   v
-1. Muse Voice Transcribe (Meta Model API) -> raw text + timestamps + confidence
+1. Muse Voice Transcribe (Meta Model API) `src/transcription/client.py`
+   -> segments + timestamps + confidence + EN-KE/SW-KE
   |
   v
-2. Muse Spark (Meta Model API) Agents:
-   - Structurer: MAGISTRATE / PROSECUTION / WITNESS + Case No, Plea
-   - Guardian: flags [VERIFY] if confidence < 0.75 or conflict
-   - Deadline: calculates 14-day appeal window
+2. Muse Spark Agents (Meta Model API) `src/agents/`
+   Structurer: speakers + Case No
+   Guardian: flags confidence < 0.75 for HUMAN replay
+   Deadline: suggests 14-day / 60-day appeal dates, human must confirm law
   |
   v
-3. HUMAN-IN-THE-LOOP UI:
-   Clerk MUST replay + Edit/Accept each flag -> Magistrate MUST click CERTIFY
-   No auto-certify. Audit log: AI v1 -> Clerk edits -> Magistrate certified + hash
+3. HUMAN VERIFICATION `src/verification/service.py` + `app.py`
+   Clerk (Human 1) MUST review each flagged segment individually
+   Magistrate (Human 2, different person) MUST click CERTIFY
+   -> SHA256 hash + audit log: AI_DRAFT -> CLERK_REVIEWED -> CERTIFIED
   |
-  +--> Muse Wonder -> Kiswahili Mwananchi explainer
-  +--> SAM 3.1 -> segments charge sheet photo, masks signature
-  +--> Muse Image -> visual case timeline
-  +--> Muse Glimmer Open Weights (LOCAL OFFLINE) -> PII redaction, no internet
+  +--> Certified PDF `src/export/pdf_service.py` (human export only)
+  +--> Muse Wonder Explainer EN/SW `src/explainer/` (human approve)
+  +--> Muse Image Timeline `src/timeline/` (human approve)
+  +--> SAM 3.1 Redaction `src/vision/` (human approve masks)
+  +--> Muse Glimmer Offline Redaction `src/offline/` (local, human approve)
+
+No certified record = no public output. No named human = no export/share.

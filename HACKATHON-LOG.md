@@ -12,3 +12,4 @@ Old exploration repo for transparency: https://github.com/okelloodhiambocvs/Haki
 - [x] Step 6: Muse Wonder Mwananchi explainer (EN/SW) blocked until certified, human approval required, 18 tests passed
 - [x] Step 7: Certified PDF export (human only, fpdf XPos fix) + SAM 3.1 redaction with human approval, 24 tests passed
 - [x] Step 8: Muse Image timeline (human approved) + Muse Glimmer offline redaction (human approved), 30 tests passed
+- [x] Step 9: Synthetic demo data + end-to-end human journey test (32 tests) + judge-ready README/ARCHITECTURE

@@ -10,3 +10,4 @@
 | 2026-10-27 | Create human verification service + UI with clerk/magistrate separation | draft, manually replaced with locked verified version | src/verification/service.py, app.py |
 | 2026-10-27 | Create Muse Wonder explainer client + human approval service | draft, manually replaced with locked verified version | src/explainer/wonder_client.py, src/explainer/service.py |
 | 2026-10-28 | Fix fpdf XPos/YPos import + certified PDF/SAM redaction | draft, manually replaced with locked verified version | src/export/pdf_service.py, src/vision/sam_client.py |
+| 2026-10-28 | Create Muse Image timeline + Glimmer offline redaction with human approval | draft, manually replaced with locked verified version | src/timeline/image_client.py, src/offline/glimmer_client.py |

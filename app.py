@@ -9,6 +9,8 @@ from src.verification.service import (
 from src.explainer.service import generate_mwananchi_explainer, human_approve_explainer
 from src.export.pdf_service import build_pdf_bytes
 from src.vision.service import create_redaction_draft, human_approve_redaction
+from src.timeline.service import generate_case_timeline, human_approve_timeline
+from src.offline.service import create_offline_redaction, human_approve_offline_redaction
 
 st.set_page_config(page_title="HakiScribe-AI", layout="wide")
 st.title("HakiScribe-AI — Clarity in Every Proceeding")
@@ -20,6 +22,8 @@ if "pdf_bytes" not in st.session_state:
     st.session_state["pdf_bytes"] = None
 if "redaction_draft" not in st.session_state:
     st.session_state["redaction_draft"] = None
+if "offline_draft" not in st.session_state:
+    st.session_state["offline_draft"] = None
 
 st.subheader("Human-in-the-Loop Status")
 session = st.session_state["session"]
@@ -133,6 +137,48 @@ if session is not None:
                 st.success(f"Redaction approved by {clerk_name}")
             except Exception as e:
                 st.error(str(e))
+
+    if session.get("certified"):
+        st.subheader("Muse Image Visual Timeline - Human Approval Required")
+        if st.button("Generate Visual Timeline"):
+            try:
+                generate_case_timeline(session, force_mock=True)
+                st.success("Timeline draft created. NOT approved yet.")
+            except Exception as e:
+                st.error(str(e))
+
+        timeline = session.get("timeline")
+        if timeline:
+            st.write(timeline["title"])
+            st.write(timeline["steps"])
+            st.write(f"Approved: {timeline['approved']} By: {timeline['approved_by']}")
+            if st.button("Human Approve Timeline"):
+                try:
+                    human_approve_timeline(session, clerk_name)
+                    st.success(f"Timeline approved by {clerk_name}")
+                except Exception as e:
+                    st.error(str(e))
+
+        st.subheader("Offline Glimmer Redaction - Human Approval Required")
+        st.write("Works offline on court laptop. AI suggests masks only. Human must approve.")
+        if st.button("Create Offline Redaction Draft"):
+            try:
+                st.session_state["offline_draft"] = create_offline_redaction(session["final_text"], force_mock=True)
+                st.success("Offline redaction draft created. NOT approved.")
+            except Exception as e:
+                st.error(str(e))
+
+        offline_draft = st.session_state.get("offline_draft")
+        if offline_draft:
+            st.write(offline_draft["redacted_text"])
+            st.write(offline_draft["findings"])
+            st.write(f"Approved: {offline_draft['approved']} By: {offline_draft['approved_by']}")
+            if st.button("Human Approve Offline Redaction"):
+                try:
+                    human_approve_offline_redaction(offline_draft, clerk_name, session=session)
+                    st.success(f"Offline redaction approved by {clerk_name}")
+                except Exception as e:
+                    st.error(str(e))
 
     st.subheader("Audit Log - Who did what")
     for entry in session["audit_log"]:

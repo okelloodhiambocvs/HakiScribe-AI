@@ -10,3 +10,4 @@ Old exploration repo for transparency: https://github.com/okelloodhiambocvs/Haki
 - [x] Step 4: Muse Spark agents (Structurer, Guardian, Deadline) with human lock, 10 tests passed
 - [x] Step 5: Human verification service (Clerk per-segment review, Magistrate certify, audit+hash), UI wired, 14 tests passed
 - [x] Step 6: Muse Wonder Mwananchi explainer (EN/SW) blocked until certified, human approval required, 18 tests passed
+- [x] Step 7: Certified PDF export (human only, fpdf XPos fix) + SAM 3.1 redaction with human approval, 24 tests passed

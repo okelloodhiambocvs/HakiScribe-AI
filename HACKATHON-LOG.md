@@ -13,3 +13,5 @@ Old exploration repo for transparency: https://github.com/okelloodhiambocvs/Haki
 - [x] Step 7: Certified PDF export (human only, fpdf XPos fix) + SAM 3.1 redaction with human approval, 24 tests passed
 - [x] Step 8: Muse Image timeline (human approved) + Muse Glimmer offline redaction (human approved), 30 tests passed
 - [x] Step 9: Synthetic demo data + end-to-end human journey test (32 tests) + judge-ready README/ARCHITECTURE
+- [x] Step 11: Defined V2 layered architecture (frontend/backend/database) and deferred scope, Kenyan speakers + EN/SW code-switch locked, docs only
+- [x] Step 12: Created V2 frontend/backend/database skeleton with config shim, old src kept working, 32 tests passed

@@ -12,3 +12,5 @@
 | 2026-10-28 | Fix fpdf XPos/YPos import + certified PDF/SAM redaction | draft, manually replaced with locked verified version | src/export/pdf_service.py, src/vision/sam_client.py |
 | 2026-10-28 | Create Muse Image timeline + Glimmer offline redaction with human approval | draft, manually replaced with locked verified version | src/timeline/image_client.py, src/offline/glimmer_client.py |
 | 2026-10-28 | Draft hackathon README and architecture | draft, manually replaced with locked verified version | README.md, ARCHITECTURE.md |
+| 2026-10-28 | Draft ARCHITECTURE-V2 and SCOPE-V2 for judge workflow | Muse draft, manually replaced with locked verified docs | docs/architecture/ARCHITECTURE-V2.md, docs/SCOPE-V2.md |
+| 2026-10-28 | Create V2 layered skeleton frontend/backend/database and backend core config shim | Muse created skeleton, human reviewed diff and tested | frontend/, backend/, database/, storage/, extras/ |

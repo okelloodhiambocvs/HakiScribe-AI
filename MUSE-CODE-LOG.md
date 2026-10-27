@@ -7,3 +7,4 @@
 | 2026-10-27 | transcribe_audio with Meta API + mock fallback | client.py, tests/test_transcribe.py | src/transcription/client.py, tests/test_transcribe.py |
 | 2026-10-27 | Create transcribe_audio with mock + real API path | draft, manually replaced with locked verified version | src/transcription/client.py |
 | 2026-10-27 | Create Spark structurer/guardian/deadline agents | draft, manually replaced with locked verified version | src/agents/spark_client.py, src/agents/agents.py |
+| 2026-10-27 | Create human verification service + UI with clerk/magistrate separation | draft, manually replaced with locked verified version | src/verification/service.py, app.py |

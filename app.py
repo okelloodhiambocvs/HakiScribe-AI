@@ -5,6 +5,7 @@ from src.verification.service import (
     create_review_session, clerk_review_segment,
     can_clerk_complete, clerk_complete_review, magistrate_certify
 )
+from src.explainer.service import generate_mwananchi_explainer, human_approve_explainer
 
 st.set_page_config(page_title="HakiScribe-AI", layout="wide")
 st.title("HakiScribe-AI — Clarity in Every Proceeding")
@@ -71,6 +72,30 @@ if session is not None:
         st.subheader("Certified Final Transcript (SYNTHETIC)")
         st.write(session["final_text"])
         st.write(f"SHA256 Hash: {session['final_hash']}")
+
+    if session.get("certified"):
+        st.subheader("Mwananchi Explainer - Muse Wonder (Human Approval Required)")
+        st.write("AI explainer is DRAFT only. A human staff member must approve before sharing with litigant.")
+        if st.button("Generate Mwananchi Explainer"):
+            try:
+                generate_mwananchi_explainer(session, force_mock=True)
+                st.success("Explainer draft created. NOT approved yet.")
+            except Exception as e:
+                st.error(str(e))
+
+        explainer = session.get("explainer")
+        if explainer:
+            st.write("English:")
+            st.write(explainer["explainer_en"])
+            st.write("Kiswahili:")
+            st.write(explainer["explainer_sw"])
+            st.write(f"Approved: {explainer['approved']} By: {explainer['approved_by']}")
+            if st.button("Human Approve Explainer"):
+                try:
+                    human_approve_explainer(session, clerk_name)
+                    st.success(f"Explainer approved by {clerk_name}")
+                except Exception as e:
+                    st.error(str(e))
 
     st.subheader("Audit Log - Who did what")
     for entry in session["audit_log"]:

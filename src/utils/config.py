@@ -7,6 +7,7 @@ META_API_KEY = os.getenv("META_API_KEY", "")
 META_API_BASE = os.getenv("META_API_BASE", "https://dev.meta.ai/model-api/v1")
 META_VOICE_MODEL = os.getenv("META_VOICE_MODEL", "muse-voice-transcribe")
 META_REASONING_MODEL = os.getenv("META_REASONING_MODEL", "muse-spark")
+META_WONDER_MODEL = os.getenv("META_WONDER_MODEL", "muse-wonder")
 
 def is_configured() -> bool:
     key = (META_API_KEY or "").strip()

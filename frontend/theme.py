@@ -125,6 +125,114 @@ select:focus-visible {
     outline-offset: 2px;
     box-shadow: 0 0 0 2px $primary_dark_green;
 }
+div[data-testid="stButton"] > button { min-height: 44px; }
+.about-page { max-width: 72rem; margin: 0 auto; overflow-x: clip; }
+.about-hero { text-align: center; padding: 1.5rem 1rem; }
+.about-hero h1 { color: $primary_dark_green; font-size: 2.5rem; margin-bottom: 0.5rem; }
+.about-hero p { color: $text_dark; font-size: 1.1rem; }
+.about-section { padding: 1rem 0.5rem; }
+.about-center { text-align: center; color: $primary_dark_green; }
+.about-problem-card {
+    background-color: $card_bg;
+    border: 1px solid $accent_light;
+    border-top: 3px solid $accent_gold_brown;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    height: 100%;
+}
+.about-problem-label {
+    display: inline-block;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    margin-bottom: 0.5rem;
+}
+.label-green { background-color: $primary_dark_green; color: #FFFFFF; }
+.label-gold { background-color: $accent_gold_brown; color: $primary_dark_green; }
+.label-amber { background-color: #F5E6C8; color: $text_dark; }
+.label-dark { background-color: $text_dark; color: $cream_bg; }
+.about-approach-lead { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.about-approach-lead svg { flex: 0 0 auto; max-width: 100%; height: auto; }
+.about-checklist { list-style: none; padding-left: 0; }
+.about-checklist li {
+    position: relative;
+    padding-left: 2rem;
+    margin-bottom: 0.75rem;
+    color: $text_dark;
+}
+.about-checklist li::before {
+    content: "✓";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    background-color: $primary_dark_green;
+    color: #FFFFFF;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.5rem;
+}
+.about-solution-card { border-radius: 0.75rem; padding: 1.25rem; height: 100%; }
+.tint-green { background-color: $primary_dark_green; color: #FFFFFF; }
+.tint-green h3 { color: #FFFFFF; }
+.tint-green p { color: #FFFFFF; }
+.tint-white {
+    background-color: $card_bg;
+    border: 1px solid $accent_light;
+    border-top: 3px solid $accent_gold_brown;
+    color: $text_dark;
+}
+.tint-amber {
+    background-color: #F5E6C8;
+    border: 1px solid $accent_gold_brown;
+    color: $text_dark;
+}
+.about-step-number {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    background-color: $accent_gold_brown;
+    color: $primary_dark_green;
+    margin-bottom: 0.5rem;
+}
+.about-badge-live, .about-badge-next {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    margin: 0.25rem 0 0.5rem 0.5rem;
+}
+.about-badge-live { background-color: $success; color: #FFFFFF; }
+.about-badge-next {
+    background-color: $cream_bg;
+    color: $primary_dark_green;
+    border: 1px solid $accent_gold_brown;
+}
+.about-footer {
+    background-color: $deep_green;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+}
+.about-footer h3 { color: $accent_gold_brown; font-size: 1.05rem; }
+.about-footer p { color: $cream_bg; }
+.about-footer-bottom {
+    text-align: center;
+    color: $cream_bg;
+    font-size: 0.85rem;
+    border-top: 1px solid $accent_gold_brown;
+    padding-top: 1rem;
+    margin-top: 1rem;
+}
 @media (max-width: 768px) {
     .block-container { padding: 1rem 0.75rem; }
     div[data-testid="column"] { min-width: 100% !important; margin-bottom: 0.5rem; }
@@ -133,6 +241,9 @@ select:focus-visible {
     h2 { font-size: 1.4rem !important; }
     h3 { font-size: 1.2rem !important; }
     button[kind="primary"], button[kind="secondary"] { width: 100%; }
+    .about-hero h1 { font-size: 1.9rem !important; }
+    .about-approach-lead { flex-direction: column; align-items: flex-start; }
+    .about-problem-card, .about-solution-card { padding: 0.9rem; }
 }
 </style>
 """

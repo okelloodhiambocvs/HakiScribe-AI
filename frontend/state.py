@@ -14,6 +14,7 @@ TRANSCRIPT_SEARCH = "transcript_search"
 DRAFT_EDITS = "draft_edits"
 HEARING_UPLOAD = "hearing_upload"
 TRANSCRIBING = "transcribing"
+SHOW_ABOUT = "show_about"
 
 
 def init_state() -> None:
@@ -32,3 +33,5 @@ def init_state() -> None:
         st.session_state[SPEAKER_FILTER] = "ALL"
     if SHOW_LOW_CONFIDENCE_ONLY not in st.session_state:
         st.session_state[SHOW_LOW_CONFIDENCE_ONLY] = False
+    if SHOW_ABOUT not in st.session_state:
+        st.session_state[SHOW_ABOUT] = False

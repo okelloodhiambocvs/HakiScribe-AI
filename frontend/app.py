@@ -14,6 +14,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from frontend import state
+from frontend.components.about_page import render_about
 from frontend.components.stepper import can_access_step, render_stepper
 from frontend.theme import apply_theme
 from frontend.views import export_view, review_view, transcribe_view, upload_view
@@ -47,8 +48,16 @@ st.sidebar.markdown(
     "3. Review Desk (next)\n"
     "4. Draft Export (next)"
 )
+st.sidebar.divider()
+if st.sidebar.button("About Us", key="about_us_button"):
+    st.session_state[state.SHOW_ABOUT] = True
+    st.rerun()
 
 state.init_state()
+
+if st.session_state.get(state.SHOW_ABOUT, False):
+    render_about()
+    st.stop()
 
 render_stepper(st.session_state[state.CURRENT_STEP])
 

@@ -15,8 +15,11 @@ from backend.integrations.meta.voice_transcribe import (  # noqa: F401 (re-expor
     TranscriptionError,
 )
 from backend.repositories import segments_repo
+from backend.repositories.segments_repo import (  # noqa: F401 (re-export)
+    AlreadyTranscribedError,
+    TranscriptionLockedError,
+)
 from backend.services.ingestion_service import get_recording_or_raise
-from database.db import get_db_path
 
 __all__ = [
     "transcribe_recording",
@@ -24,6 +27,8 @@ __all__ = [
     "get_transcript",
     "TranscriptionError",
     "AudioPrepError",
+    "AlreadyTranscribedError",
+    "TranscriptionLockedError",
     "TranscriptionInProgressError",
 ]
 
@@ -39,8 +44,15 @@ _transcribe_in_flight: set[tuple[str, int]] = set()
 def _in_flight_key(
     recording_id: int, db_path: str | Path | None
 ) -> tuple[str, int]:
-    """Identify one recording in one database file for the in-flight set."""
-    return (str(get_db_path(db_path)), recording_id)
+    """Scope in-flight tracking per database argument + recording.
+
+    Best effort: two spellings of one file key differently, but the
+    repository's BEGIN IMMEDIATE plus the AlreadyTranscribedError
+    conversion still guarantee exactly one transcript. Deliberately
+    avoids importing database (services never import it).
+    """
+    scope = "DEFAULT" if db_path is None else str(db_path)
+    return (scope, recording_id)
 
 
 def _source_of(recording: dict) -> str:
@@ -127,7 +139,7 @@ def transcribe_recording(
             saved, source = _persist_result(
                 recording_id, result, db_path, replace=False
             )
-        except segments_repo.AlreadyTranscribedError:
+        except AlreadyTranscribedError:
             # Another process transcribed while the Meta call was running.
             fresh = get_recording_or_raise(recording_id, db_path=db_path)
             return _already_transcribed_result(recording_id, fresh, db_path)

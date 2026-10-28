@@ -21,6 +21,9 @@ from backend.services.transcription_service import (
     get_transcript,
     transcribe_recording,
 )
+from frontend.components.stepper import render_stepper
+from frontend.components.transcript_card import render_segment_card
+from frontend.theme import apply_theme
 
 CONFIDENCE_THRESHOLD = 0.75
 
@@ -37,7 +40,39 @@ def _format_confidence(confidence: float | None) -> str:
     return f"{float(confidence) * 100:.0f}%"
 
 
+def _format_file_size(num_bytes: int) -> str:
+    """Render a byte count as B, KB, or MB."""
+    size = float(num_bytes or 0)
+    if size < 1024:
+        return f"{size:.0f} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _reset_draft_edit(segment_id: int) -> None:
+    """Drop one segment's UI draft and its widget state (database untouched)."""
+    drafts = st.session_state.get("draft_edits", {})
+    drafts.pop(segment_id, None)
+    st.session_state.pop(f"draft_edit_{segment_id}", None)
+
+
+def _clear_upload_state() -> None:
+    """Clear upload-related session state (disk and database untouched)."""
+    for key in (
+        "recording_id",
+        "recording",
+        "transcript_status",
+        "selected_segment_idx",
+        "hearing_upload",
+        "upload_notice",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state["current_step"] = "upload"
+
+
 st.set_page_config(page_title="HakiScribe-AI Review Desk", layout="wide")
+apply_theme()
 
 st.title("HakiScribe-AI")
 st.subheader("Clarity in Every Proceeding")
@@ -61,43 +96,109 @@ if "recording" not in st.session_state:
     st.session_state["recording"] = None
 if "transcript_status" not in st.session_state:
     st.session_state["transcript_status"] = None
+if "current_step" not in st.session_state:
+    st.session_state["current_step"] = "upload"
+if "selected_segment_idx" not in st.session_state:
+    st.session_state["selected_segment_idx"] = None
+if "speaker_filter" not in st.session_state:
+    st.session_state["speaker_filter"] = "ALL"
+if "show_low_confidence_only" not in st.session_state:
+    st.session_state["show_low_confidence_only"] = False
 
-st.header("1. Upload synthetic hearing")
-upload_box = st.container()
-uploaded = upload_box.file_uploader(
-    "Choose a synthetic hearing file",
-    type=["mp3", "wav", "m4a", "aac", "adts", "ogg", "opus", "webm"],
-)
-attested = upload_box.checkbox(
-    "I confirm this is a synthetic demo recording (no real litigants)."
-)
-if upload_box.button("Upload and Validate Recording"):
-    if uploaded is None:
-        st.error("Choose an audio file first.")
-    elif not attested:
-        st.error("Tick the synthetic attestation checkbox to continue.")
-    elif not reviewer.strip():
-        st.error("Enter your reviewer name in the sidebar first.")
-    else:
-        try:
-            recording = validate_and_store_upload(
-                uploaded.name, uploaded.getvalue(), reviewer,
-                synthetic_attestation=True,
-            )
-        except ValueError as exc:
-            st.error(str(exc))
-        else:
-            st.session_state["recording_id"] = recording["id"]
-            st.session_state["recording"] = recording
-            st.session_state["transcript_status"] = None
-            st.success(
-                f"Stored {recording['filename']} "
-                f"({recording['size_bytes']} bytes, "
-                f"sha256 {recording['sha256'][:12]}…)."
-            )
+render_stepper(st.session_state["current_step"])
+
+nav_upload, nav_transcribe, nav_review, nav_export = st.columns(4)
+if nav_upload.button("Upload"):
+    st.session_state["current_step"] = "upload"
+    st.rerun()
+if nav_transcribe.button("Transcribe"):
+    st.session_state["current_step"] = "transcribe"
+    st.rerun()
+if nav_review.button("Review Desk"):
+    st.session_state["current_step"] = "review"
+    st.rerun()
+if nav_export.button("Draft & Evaluation"):
+    st.session_state["current_step"] = "export"
+    st.rerun()
+
+step = st.session_state["current_step"]
+
+notice = st.session_state.get("upload_notice")
+if notice:
+    st.success("Recording validated and stored.")
+    st.info(
+        f"File: {notice['filename']} | "
+        f"Size: {notice['size_bytes']} bytes | "
+        f"SHA256: {notice['sha256'][:12]}…"
+    )
+    del st.session_state["upload_notice"]
+
+if step in ("upload", "transcribe"):
+    st.header("Step 1 - Upload Synthetic Hearing Recording")
+    upload_box = st.container(border=True)
+    uploaded = upload_box.file_uploader(
+        "Choose a synthetic hearing file",
+        type=["mp3", "wav", "m4a", "aac", "adts", "ogg", "opus", "webm"],
+        key="hearing_upload",
+    )
+    upload_box.caption(
+        "MP3, WAV, M4A, AAC, ADTS, OGG, OPUS, WEBM - synthetic recordings only"
+    )
+    attested = upload_box.checkbox(
+        "I confirm this is a synthetic demo recording with no real litigants"
+    )
+    has_recording = st.session_state.get("recording_id") is not None
+    if uploaded is None and not has_recording:
+        upload_box.info(
+            "No recording yet. Upload a short synthetic hearing, "
+            "for example CR 123/2026 read from demo-data/synthetic."
+        )
+    elif uploaded is not None and not has_recording:
+        upload_size = getattr(uploaded, "size", None)
+        if upload_size is None:
+            try:
+                upload_size = len(uploaded.getvalue())
+            except Exception:
+                upload_size = 0
+        upload_box.info(
+            f"Selected: {uploaded.name} ({_format_file_size(upload_size)})"
+        )
+    can_upload = (
+        uploaded is not None and attested and bool(reviewer.strip())
+    )
+    if not can_upload:
+        upload_box.warning(
+            "Add a reviewer name, choose a file, and tick the attestation to enable upload."
+        )
+    btn_upload, btn_clear = upload_box.columns(2)
+    if btn_upload.button(
+        "Upload and Validate Recording", type="primary", disabled=not can_upload
+    ):
+        with st.spinner("Validating and storing synthetic recording..."):
+            try:
+                recording = validate_and_store_upload(
+                    uploaded.name, uploaded.getvalue(), reviewer,
+                    synthetic_attestation=True,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            except Exception:
+                st.error("Upload failed unexpectedly. Please try a different file.")
+            else:
+                st.session_state["recording_id"] = recording["id"]
+                st.session_state["recording"] = recording
+                st.session_state["transcript_status"] = None
+                st.session_state["upload_notice"] = {
+                    "filename": recording["filename"],
+                    "size_bytes": recording["size_bytes"],
+                    "sha256": recording["sha256"],
+                }
+                st.session_state["current_step"] = "transcribe"
+                st.rerun()
+    btn_clear.button("Clear Upload", type="secondary", on_click=_clear_upload_state)
 
 recording = st.session_state["recording"]
-if recording is not None:
+if recording is not None and step in ("upload", "transcribe"):
     st.header("Recording")
     meta_left, meta_right = st.columns(2)
     meta_left.write(f"File: {recording['filename']}")
@@ -133,20 +234,97 @@ if recording is not None:
 
     segments = get_transcript(recording["id"])
     if segments:
-        st.subheader(f"Transcript — {len(segments)} segments")
-        for segment in segments:
-            card = st.container()
-            card.write(
-                    f"{_format_time_range(segment['start_sec'], segment['end_sec'])}"
+        st.info(
+            "Original AI text is preserved. Draft edits in this UI preview "
+            "are not yet written to the correction history."
+        )
+        active_filter = st.session_state.get("speaker_filter", "ALL")
+        filter_cols = st.columns(7)
+        for column, speaker in zip(
+            filter_cols,
+            ["ALL", "MAGISTRATE", "PROSECUTOR", "ADVOCATE", "ACCUSED", "COMPLAINANT", "WITNESS_PW1"],
+        ):
+            if column.button(
+                speaker,
+                type="primary" if speaker == active_filter else "secondary",
+                key=f"speaker_filter_{speaker}",
+            ):
+                st.session_state["speaker_filter"] = speaker
+                st.rerun()
+        st.session_state["show_low_confidence_only"] = st.checkbox(
+            "Show low confidence only (<0.75)",
+            value=st.session_state.get("show_low_confidence_only", False),
+        )
+        st.session_state["transcript_search"] = st.text_input(
+            "Search transcript",
+            value=st.session_state.get("transcript_search", ""),
+        )
+        query = st.session_state["transcript_search"].strip().lower()
+        low_only = st.session_state["show_low_confidence_only"]
+        speaker_filter = st.session_state["speaker_filter"]
+        filtered = [
+            segment
+            for segment in segments
+            if (speaker_filter == "ALL" or segment["speaker"] == speaker_filter)
+            and (
+                not low_only
+                or (
+                    segment["confidence"] is not None
+                    and float(segment["confidence"]) < CONFIDENCE_THRESHOLD
                 )
-            info_left, info_right, info_third = st.columns(3)
-            info_left.write(f"Speaker: {segment['speaker']}")
-            info_right.write(f"Confidence: {_format_confidence(segment['confidence'])}")
-            info_third.write(f"Language: {segment['language']}")
-            card.write(segment["text_current"])
-            confidence = segment["confidence"]
-            if confidence is not None and float(confidence) < CONFIDENCE_THRESHOLD:
-                card.warning("Needs human review")
-            details = st.expander(f"Segment {segment['idx']} details")
-            details.write(f"Row id: {segment['id']}")
-            details.write(f"Original: {segment['text_original']}")
+            )
+            and (not query or query in (segment["text_current"] or "").lower())
+        ]
+        st.caption(f"Showing {len(filtered)} of {len(segments)} segments")
+        st.caption("Listen buttons preview selection only; precise audio seeking connects later.")
+        selected_idx = st.session_state.get("selected_segment_idx")
+        for segment in filtered:
+            render_segment_card(segment, is_selected=segment["idx"] == selected_idx)
+            select_col, listen_col = st.columns(2)
+            if select_col.button("Select", key=f"select_{segment['id']}"):
+                st.session_state["selected_segment_idx"] = segment["idx"]
+                st.rerun()
+            if listen_col.button("Listen (Preview)", key=f"listen_{segment['id']}"):
+                st.session_state["selected_segment_idx"] = segment["idx"]
+                st.rerun()
+        selected = next(
+            (item for item in segments if item["idx"] == selected_idx), None
+        )
+        if selected is not None:
+            st.subheader("Selected segment")
+            st.write(f"speaker: {selected['speaker']}")
+            st.write(f"start_sec: {selected['start_sec']}")
+            st.write(f"end_sec: {selected['end_sec']}")
+            st.write(f"confidence: {selected['confidence']}")
+            st.write(f"language: {selected['language']}")
+            st.text_area(
+                "Original AI text",
+                value=selected["text_original"],
+                disabled=True,
+                key=f"original_text_{selected['id']}",
+            )
+            drafts = st.session_state.setdefault("draft_edits", {})
+            st.text_area(
+                "Current text (draft)",
+                value=drafts.get(selected["id"], selected["text_current"]),
+                key=f"draft_edit_{selected['id']}",
+            )
+            if st.button("Save Draft Edit (UI only)"):
+                drafts[selected["id"]] = st.session_state[f"draft_edit_{selected['id']}"]
+                st.success("Draft edit saved locally - backend correction saving connects in the next backend step")
+            st.button("Reset Edit", on_click=_reset_draft_edit, args=(selected["id"],))
+    else:
+        st.info("No transcript yet. Upload and transcribe a synthetic recording first.")
+        if st.button("Go to Upload"):
+            st.session_state["current_step"] = "upload"
+            st.rerun()
+elif step == "transcribe":
+    st.info("Upload and validate a recording first.")
+
+if step == "review":
+    st.header("3. Review Desk")
+    st.info("Interactive preview - backend workflow connects in the next backend step.")
+
+if step == "export":
+    st.header("4. Draft & Evaluation")
+    st.info("Interactive preview - backend workflow connects in the next backend step.")

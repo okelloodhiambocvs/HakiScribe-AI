@@ -12,6 +12,7 @@ from pathlib import Path
 from backend.repositories import recordings_repo
 
 ALLOWED_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".adts", ".ogg", ".opus", ".webm")
+DEMO_RECORDING_PATH = Path("demo-data/synthetic/case-cr-123-2026.wav")
 _BYTES_PER_MB = 1024 * 1024
 
 
@@ -66,6 +67,33 @@ def validate_and_store_upload(
         db_path=db_path,
     )
     return recordings_repo.get_recording(recording_id, db_path=db_path)
+
+
+def load_demo_recording(
+    reviewer_name: str,
+    upload_dir: str | Path = "storage/uploads",
+    db_path: str | Path | None = None,
+    max_size_mb: int = 25,
+) -> dict:
+    """Load the bundled synthetic demo recording through the normal path.
+
+    Same validation, hashing, and synthetic attestation as an upload.
+    ValueError with a friendly message when the demo file is missing.
+    """
+    if not DEMO_RECORDING_PATH.is_file():
+        raise ValueError(
+            "Demo recording not found at demo-data/synthetic/case-cr-123-2026.wav. "
+            "Run scripts/make_demo_audio.ps1 to generate it, or upload a file below."
+        )
+    return validate_and_store_upload(
+        DEMO_RECORDING_PATH.name,
+        DEMO_RECORDING_PATH.read_bytes(),
+        reviewer_name,
+        synthetic_attestation=True,
+        upload_dir=upload_dir,
+        db_path=db_path,
+        max_size_mb=max_size_mb,
+    )
 
 
 def get_recording_or_raise(

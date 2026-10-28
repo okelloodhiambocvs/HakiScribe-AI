@@ -2,7 +2,10 @@
 
 import streamlit as st
 
-from backend.services.ingestion_service import validate_and_store_upload
+from backend.services.ingestion_service import (
+    load_demo_recording,
+    validate_and_store_upload,
+)
 from frontend import state
 
 
@@ -47,10 +50,28 @@ def render(reviewer: str) -> None:
         "I confirm this is a synthetic demo recording with no real litigants"
     )
     if uploaded is None and not has_recording:
-        upload_box.info(
-            "No recording yet. Upload a short synthetic hearing, "
-            "for example CR 123/2026 read from demo-data/synthetic."
-        )
+        upload_box.info("No recording yet.")
+        if upload_box.button("Load demo recording", type="primary", key="load_demo_recording"):
+            if not reviewer.strip():
+                upload_box.warning("Add a reviewer name first, then load the demo.")
+            else:
+                try:
+                    recording = load_demo_recording(reviewer)
+                except ValueError as exc:
+                    upload_box.error(str(exc))
+                except Exception:
+                    upload_box.error("Demo load failed unexpectedly. Please try again.")
+                else:
+                    st.session_state[state.RECORDING_ID] = recording["id"]
+                    st.session_state[state.RECORDING] = recording
+                    st.session_state[state.TRANSCRIPT_STATUS] = None
+                    st.session_state[state.UPLOAD_NOTICE] = {
+                        "filename": recording["filename"],
+                        "size_bytes": recording["size_bytes"],
+                        "sha256": recording["sha256"],
+                    }
+                    st.session_state[state.CURRENT_STEP] = "transcribe"
+                    st.rerun()
     elif uploaded is not None and not has_recording:
         upload_size = getattr(uploaded, "size", None)
         if upload_size is None:

@@ -10,10 +10,10 @@ Deliberately deferred; do not build for this submission:
 
 See docs/SCOPE-V2.md for the deferred list.
 
-## Parked V1 client modules (reference only, never imported)
+## Parked V1 client modules (reference only, never called by core)
 
-Moved here untouched from `src/` during the V2 layering. They still reference
-the deleted `src.*` package paths and are kept for reference only:
+Moved here from `src/` during the V2 layering. Imports are repointed to
+`backend.core.config` and `extras.*`, covered by an import smoke test:
 - `explainer/` — Muse Wonder client + service (V1 citizen explainer)
 - `timeline/` — Muse Image client + service (V1 visual timeline)
 - `vision/` — SAM 3.1 client + service (V1 charge-sheet redaction)

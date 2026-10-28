@@ -15,14 +15,19 @@ Upload → Transcribe → Review → Export. Priority 1 (upload + transcribe) is
 3. **Review desk (next)** — Spark flags, jump-to-audio, reviewer edits and per-segment decisions.
 4. **Draft export + evaluation (next)** — watermarked DOCX draft with WER/CER against the reviewer's corrections.
 
-## Meta models actually used
+## Component status
 
-| Model | Status | Role |
+| Area | Status | Notes |
 |---|---|---|
-| Muse Voice Transcribe | Live | Transcription with timestamps + confidence (`backend/integrations/meta/voice_transcribe.py`) |
-| Muse Spark or Muse Wonder | Next | Intelligent flagging of errors/inconsistencies (suggest only) |
-
-Parked in [`extras/`](extras/README.md), not in the core workflow: Muse Image, SAM 3.1, Muse Glimmer offline.
+| Muse Voice Transcribe | Live | Timestamps + confidence (`backend/integrations/meta/voice_transcribe.py`) |
+| Muse Spark review flags | Planned | Later step; the review desk shows an honest preview today |
+| Corrections history | Planned | Repository ready; reviewer save flow is a later step |
+| DOCX draft export | Planned | Later step; no generator yet |
+| WER/CER evaluation | Planned | Later step; placeholders only |
+| Muse Wonder explainer | Parked | `extras/`, not in the core workflow |
+| Muse Image timeline | Parked | `extras/`, not in the core workflow |
+| SAM 3.1 redaction | Parked | `extras/`, not in the core workflow |
+| Muse Glimmer offline | Parked | `extras/`, not in the core workflow |
 
 ## Human-in-the-loop
 
@@ -43,12 +48,16 @@ streamlit run frontend/app.py
 
 Demo flow (works fully offline in mock mode):
 
+One-click demo: enter your reviewer name and press **Load demo recording**
+(expects `demo-data/synthetic/case-cr-123-2026.wav`; generate it with
+`scripts/make_demo_audio.ps1`).
+
 1. Enter your reviewer name.
 2. Upload a synthetic hearing file and tick the attestation box.
 3. Transcribe (mock mode needs no key) and read the timestamped segments.
 
 ```bash
-pytest   # 16 tests, all passing
+pytest   # 73 tests, all passing
 ```
 
 ## Project structure
@@ -65,7 +74,8 @@ data/                         # local SQLite file lives here (gitignored)
 extras/                       # parked V1 client modules, reference only
 docs/architecture/ARCHITECTURE-V2.md # layer design + schema
 docs/SCOPE-V2.md              # submission scope + deferred list
-demo-data/synthetic/          # fictional case script + charge sheet
+demo-data/synthetic/          # fictional script + charge sheet + demo wav
+scripts/make_demo_audio.ps1   # render the demo wav with Windows voices
 tests/                        # test_database_v2, test_ingestion_v2, test_transcription_v2
 ```
 
@@ -74,10 +84,11 @@ tests/                        # test_database_v2, test_ingestion_v2, test_transc
 | Variable | Purpose |
 |---|---|
 | `META_API_KEY` | dev.meta.ai key; blank/placeholder = mock mode |
-| `META_API_BASE` | Model API base URL (default `https://dev.meta.ai/model-api/v1`) |
+| `META_API_BASE` | Model API base URL (default `https://api.meta.ai/v1`) |
 | `META_VOICE_MODEL` | Voice Transcribe model name (live) |
 | `META_REASONING_MODEL` / `META_WONDER_MODEL` | Spark / Wonder model names (flagging next) |
 | `META_SAM_MODEL` / `META_IMAGE_MODEL` / `META_OPEN_MODEL` / `GLIMMER_MODEL_PATH` | Parked-model settings (unused by V2 core) |
+| `HAKISCRIBE_DB_PATH` | Override for the SQLite file (default `data/hakiscribe.db`) |
 
 ## Deferred scope
 

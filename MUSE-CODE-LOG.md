@@ -14,3 +14,4 @@
 | 2026-10-28 | Draft hackathon README and architecture | draft, manually replaced with locked verified version | README.md, ARCHITECTURE.md |
 | 2026-10-28 | Draft ARCHITECTURE-V2 and SCOPE-V2 for judge workflow | Muse draft, manually replaced with locked verified docs | docs/architecture/ARCHITECTURE-V2.md, docs/SCOPE-V2.md |
 | 2026-10-28 | Create V2 layered skeleton frontend/backend/database and backend core config shim | Muse created skeleton, human reviewed diff and tested | frontend/, backend/, database/, storage/, extras/ |
+| 2026-10-28 | Create SQLite schema, repositories and database tests for traceable corrections | Muse generated database layer, human reviewed diffs and ran tests | database/db.py, database/schema.py, backend/repositories/, tests/test_database_v2.py |

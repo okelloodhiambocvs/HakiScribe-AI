@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from src.timeline.image_client import call_muse_image
+from extras.timeline.image_client import call_muse_image
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

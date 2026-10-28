@@ -1,5 +1,5 @@
 import requests
-from src.utils.config import META_API_KEY, META_WONDER_MODEL, get_api_base, is_configured
+from backend.core.config import META_API_KEY, META_WONDER_MODEL, get_api_base, is_configured
 
 def call_muse_wonder(prompt: str, force_mock: bool = False) -> dict:
     """

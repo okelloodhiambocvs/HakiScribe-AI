@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from src.offline.glimmer_client import call_muse_glimmer_local
+from extras.offline.glimmer_client import call_muse_glimmer_local
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

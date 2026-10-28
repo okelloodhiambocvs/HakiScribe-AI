@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from src.vision.sam_client import call_sam_segment
+from extras.vision.sam_client import call_sam_segment
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

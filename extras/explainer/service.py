@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from src.explainer.wonder_client import call_muse_wonder
+from extras.explainer.wonder_client import call_muse_wonder
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

@@ -1,5 +1,5 @@
 import requests
-from src.utils.config import META_API_KEY, META_SAM_MODEL, get_api_base, is_configured
+from backend.core.config import META_API_KEY, META_SAM_MODEL, get_api_base, is_configured
 
 MOCK_SEGMENTS = [
     {"label": "STAMP", "box": [10, 10, 120, 60], "confidence": 0.94, "sensitive": False, "action": "KEEP_VISIBLE"},

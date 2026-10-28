@@ -53,7 +53,8 @@ if "transcript_status" not in st.session_state:
 st.header("1. Upload synthetic hearing")
 upload_box = st.container()
 uploaded = upload_box.file_uploader(
-    "Choose a synthetic hearing file", type=["mp3", "wav", "m4a"]
+    "Choose a synthetic hearing file",
+    type=["mp3", "wav", "m4a", "aac", "adts", "ogg", "opus", "webm"],
 )
 attested = upload_box.checkbox(
     "I confirm this is a synthetic demo recording (no real litigants)."

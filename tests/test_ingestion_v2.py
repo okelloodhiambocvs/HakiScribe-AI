@@ -74,3 +74,23 @@ def test_upload_requires_synthetic_attestation(tmp_path):
             upload_dir=tmp_path / "uploads",
             db_path=tmp_path / "t.db",
         )
+
+
+def test_upload_accepts_aac_synthetic_file(tmp_path):
+    file_bytes = b"synthetic-aac-bytes"
+    recording = validate_and_store_upload(
+        "CR 123 hearing.aac",
+        file_bytes,
+        "Reviewer Amina",
+        synthetic_attestation=True,
+        upload_dir=tmp_path / "uploads",
+        db_path=tmp_path / "t.db",
+    )
+    assert recording["id"]
+    assert recording["filename"] == "CR_123_hearing.aac"
+    assert recording["uploaded_by"] == "Reviewer Amina"
+    assert recording["size_bytes"] == len(file_bytes)
+    assert recording["sha256"] == hashlib.sha256(file_bytes).hexdigest()
+    stored = Path(recording["stored_path"])
+    assert stored.exists()
+    assert stored.read_bytes() == file_bytes

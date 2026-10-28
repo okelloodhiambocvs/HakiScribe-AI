@@ -11,7 +11,7 @@ from pathlib import Path
 
 from backend.repositories import recordings_repo
 
-ALLOWED_EXTENSIONS = (".mp3", ".wav", ".m4a")
+ALLOWED_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".adts", ".ogg", ".opus", ".webm")
 _BYTES_PER_MB = 1024 * 1024
 
 
@@ -41,7 +41,10 @@ def validate_and_store_upload(
         raise ValueError("only synthetic demo recordings are allowed for this hackathon")
     safe_name = _sanitize_filename(filename)
     if Path(safe_name).suffix.lower() not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"unsupported audio type: {filename!r} (use .mp3, .wav, .m4a)")
+        raise ValueError(
+            f"unsupported audio type: {filename!r} "
+            f"(use {', '.join(ALLOWED_EXTENSIONS)})"
+        )
     if not file_bytes:
         raise ValueError("uploaded file is empty")
     if len(file_bytes) > max_size_mb * _BYTES_PER_MB:

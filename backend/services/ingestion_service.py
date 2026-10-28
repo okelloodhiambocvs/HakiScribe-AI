@@ -9,6 +9,7 @@ import re
 import uuid
 from pathlib import Path
 
+from backend.core.errors import UploadValidationError
 from backend.repositories import recordings_repo
 
 ALLOWED_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".adts", ".ogg", ".opus", ".webm")
@@ -22,7 +23,7 @@ def _sanitize_filename(filename: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]", "", name)
     stem, dot, suffix = name.partition(".")
     if not stem or not dot:
-        raise ValueError(f"invalid filename: {filename!r}")
+        raise UploadValidationError(f"invalid filename: {filename!r}")
     return name
 
 
@@ -37,19 +38,23 @@ def validate_and_store_upload(
 ) -> dict:
     """Validate an upload, store it, and return its recording row."""
     if not uploaded_by or not uploaded_by.strip():
-        raise ValueError("uploaded_by is required")
+        raise UploadValidationError("uploaded_by is required")
     if not synthetic_attestation:
-        raise ValueError("only synthetic demo recordings are allowed for this hackathon")
+        raise UploadValidationError(
+            "only synthetic demo recordings are allowed for this hackathon"
+        )
     safe_name = _sanitize_filename(filename)
     if Path(safe_name).suffix.lower() not in ALLOWED_EXTENSIONS:
-        raise ValueError(
+        raise UploadValidationError(
             f"unsupported audio type: {filename!r} "
             f"(use {', '.join(ALLOWED_EXTENSIONS)})"
         )
     if not file_bytes:
-        raise ValueError("uploaded file is empty")
+        raise UploadValidationError("uploaded file is empty")
     if len(file_bytes) > max_size_mb * _BYTES_PER_MB:
-        raise ValueError(f"file exceeds {max_size_mb} MB limit")
+        raise UploadValidationError(
+            f"file exceeds {max_size_mb} MB limit"
+        )
 
     target_dir = Path(upload_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +86,7 @@ def load_demo_recording(
     ValueError with a friendly message when the demo file is missing.
     """
     if not DEMO_RECORDING_PATH.is_file():
-        raise ValueError(
+        raise UploadValidationError(
             "Demo recording not found at demo-data/synthetic/case-cr-123-2026.wav. "
             "Run scripts/make_demo_audio.ps1 to generate it, or upload a file below."
         )
@@ -102,5 +107,7 @@ def get_recording_or_raise(
     """Fetch a recording row; ValueError when it does not exist."""
     recording = recordings_repo.get_recording(recording_id, db_path=db_path)
     if recording is None:
-        raise ValueError(f"recording not found: {recording_id}")
+        raise UploadValidationError(
+            f"recording not found: {recording_id}"
+        )
     return recording

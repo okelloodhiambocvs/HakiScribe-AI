@@ -1,5 +1,7 @@
 """Recordings repository: ingested hearing rows. Parameterized SQL only."""
 
+import os
+import sqlite3
 from pathlib import Path
 
 from database.db import get_connection
@@ -61,5 +63,72 @@ def list_recordings(db_path: str | Path | None = None) -> list[dict]:
     try:
         rows = conn.execute("SELECT * FROM recordings ORDER BY id").fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def check_database(db_path: str | Path | None = None) -> dict:
+    """Probe reachability, writability, and user_version without changing data.
+
+    Never creates the database file and never calls init_db: a missing
+    file with a writable directory reports healthy ("not created yet").
+    """
+    from database.db import get_db_path
+
+    path = get_db_path(db_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {
+            "reachable": False,
+            "writable": False,
+            "user_version": None,
+            "error": f"cannot create directory: {exc}",
+        }
+    if not path.exists():
+        if os.access(path.parent, os.W_OK):
+            return {
+                "reachable": True,
+                "writable": True,
+                "user_version": None,
+                "error": None,
+                "note": "not created yet",
+            }
+        return {
+            "reachable": False,
+            "writable": False,
+            "user_version": None,
+            "error": "directory not writable",
+        }
+    try:
+        conn = get_connection(path)
+    except sqlite3.Error as exc:
+        return {
+            "reachable": False,
+            "writable": False,
+            "user_version": None,
+            "error": str(exc),
+        }
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.execute("BEGIN IMMEDIATE")
+        conn.rollback()
+        return {
+            "reachable": True,
+            "writable": True,
+            "user_version": int(version),
+            "error": None,
+        }
+    except sqlite3.Error as exc:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        return {
+            "reachable": True,
+            "writable": False,
+            "user_version": None,
+            "error": str(exc),
+        }
     finally:
         conn.close()

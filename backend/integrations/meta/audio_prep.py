@@ -10,14 +10,18 @@ from pathlib import Path
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
+from backend.core.errors import HakiScribeError
+
 TARGET_SAMPLE_RATE_HZ = 16000
 MAX_DURATION_SEC = 600
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 FFMPEG_TIMEOUT_SEC = 300
 
 
-class AudioPrepError(Exception):
+class AudioPrepError(HakiScribeError):
     """Raised when audio cannot be prepared for transcription."""
+
+    code = "audio_prep_failed"
 
 
 def wav_duration_sec(path: str | Path) -> float:
@@ -75,3 +79,11 @@ def prepare_wav(src: str | Path, dst: str | Path) -> Path:
             f"converted file too large: {size} bytes exceeds 32 MB"
         )
     return dst_path
+
+
+def ffmpeg_available() -> bool:
+    """True when the bundled ffmpeg executable exists (no audio needed)."""
+    try:
+        return Path(get_ffmpeg_exe()).is_file()
+    except Exception:
+        return False

@@ -15,16 +15,15 @@ DRAFT_EDITS = "draft_edits"
 HEARING_UPLOAD = "hearing_upload"
 TRANSCRIBING = "transcribing"
 SHOW_ABOUT = "show_about"
+SNAPSHOT = "snapshot"
+MOCK_MODE = "mock_mode"
+STALE_NOTICE = "stale_notice"
 
 
 def init_state() -> None:
     """Initialize default session keys; preserves any preset values."""
     if RECORDING_ID not in st.session_state:
         st.session_state[RECORDING_ID] = None
-    if RECORDING not in st.session_state:
-        st.session_state[RECORDING] = None
-    if TRANSCRIPT_STATUS not in st.session_state:
-        st.session_state[TRANSCRIPT_STATUS] = None
     if CURRENT_STEP not in st.session_state:
         st.session_state[CURRENT_STEP] = "upload"
     if SELECTED_SEGMENT_IDX not in st.session_state:

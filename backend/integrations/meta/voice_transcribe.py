@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 
 from backend.core import config
+from backend.core.errors import HakiScribeError
 from backend.integrations.meta.audio_prep import prepare_wav
 
 REQUEST_TIMEOUT_SECONDS = 120
@@ -52,8 +53,10 @@ _MOCK_LINES = (
 )
 
 
-class TranscriptionError(Exception):
+class TranscriptionError(HakiScribeError):
     """Raised when the transcription endpoint call or response fails."""
+
+    code = "transcription_failed"
 
 
 def normalize_speaker(raw_speaker: str | None) -> str:

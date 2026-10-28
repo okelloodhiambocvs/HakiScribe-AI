@@ -2,11 +2,10 @@
 
 import streamlit as st
 
-from backend.services.ingestion_service import (
-    load_demo_recording,
-    validate_and_store_upload,
-)
+from backend.services import workflow_service
+from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
+from frontend.components.errors import show_error
 
 
 def _format_file_size(num_bytes: int) -> str:
@@ -23,19 +22,19 @@ def _clear_upload_state() -> None:
     """Clear upload-related session state (disk and database untouched)."""
     for key in (
         state.RECORDING_ID,
-        state.RECORDING,
-        state.TRANSCRIPT_STATUS,
+        state.SNAPSHOT,
         state.SELECTED_SEGMENT_IDX,
         state.HEARING_UPLOAD,
         state.UPLOAD_NOTICE,
+        state.STALE_NOTICE,
     ):
         st.session_state.pop(key, None)
     st.session_state[state.CURRENT_STEP] = "upload"
 
 
-def render(reviewer: str) -> None:
+def render(reviewer: str, snapshot: WorkflowSnapshot | None) -> None:
     """Render the upload card (shared by the upload and transcribe steps)."""
-    has_recording = st.session_state.get(state.RECORDING_ID) is not None
+    has_recording = snapshot is not None
     st.header("Step 1 - Upload Synthetic Hearing Recording")
     upload_box = st.container(border=True)
     uploaded = upload_box.file_uploader(
@@ -56,15 +55,11 @@ def render(reviewer: str) -> None:
                 upload_box.warning("Add a reviewer name first, then load the demo.")
             else:
                 try:
-                    recording = load_demo_recording(reviewer)
-                except ValueError as exc:
-                    upload_box.error(str(exc))
-                except Exception:
-                    upload_box.error("Demo load failed unexpectedly. Please try again.")
+                    recording = workflow_service.load_demo(reviewer)
+                except Exception as exc:
+                    show_error(exc)
                 else:
                     st.session_state[state.RECORDING_ID] = recording["id"]
-                    st.session_state[state.RECORDING] = recording
-                    st.session_state[state.TRANSCRIPT_STATUS] = None
                     st.session_state[state.UPLOAD_NOTICE] = {
                         "filename": recording["filename"],
                         "size_bytes": recording["size_bytes"],
@@ -95,18 +90,13 @@ def render(reviewer: str) -> None:
     ):
         with st.spinner("Validating and storing synthetic recording..."):
             try:
-                recording = validate_and_store_upload(
-                    uploaded.name, uploaded.getvalue(), reviewer,
-                    synthetic_attestation=True,
+                recording = workflow_service.upload_recording(
+                    uploaded.name, uploaded.getvalue(), reviewer, attested
                 )
-            except ValueError as exc:
-                st.error(str(exc))
-            except Exception:
-                st.error("Upload failed unexpectedly. Please try a different file.")
+            except Exception as exc:
+                show_error(exc)
             else:
                 st.session_state[state.RECORDING_ID] = recording["id"]
-                st.session_state[state.RECORDING] = recording
-                st.session_state[state.TRANSCRIPT_STATUS] = None
                 st.session_state[state.UPLOAD_NOTICE] = {
                     "filename": recording["filename"],
                     "size_bytes": recording["size_bytes"],

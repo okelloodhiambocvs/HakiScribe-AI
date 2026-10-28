@@ -2,13 +2,14 @@
 
 import streamlit as st
 
+from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
 
 
-def render() -> None:
+def render(snapshot: WorkflowSnapshot | None) -> None:
     """Render the Draft & Evaluation preview with empty-state guards."""
-    has_recording = st.session_state.get(state.RECORDING_ID) is not None
-    has_transcript = st.session_state.get(state.TRANSCRIPT_STATUS) is not None
+    has_recording = snapshot is not None
+    has_transcript = bool(snapshot and snapshot.transcript_status == "present")
     st.header("4. Draft & Evaluation")
     st.info("Interactive preview - backend workflow connects in the next backend step.")
     if not has_recording:

@@ -3,6 +3,7 @@
 import sqlite3
 from pathlib import Path
 
+from backend.core.errors import HakiScribeError
 from database.db import get_connection
 from database.schema import init_db
 
@@ -10,12 +11,16 @@ _REQUIRED_KEYS = ("idx", "start_sec", "end_sec", "text_original")
 _ALLOWED_SOURCES = ("real", "mock")
 
 
-class AlreadyTranscribedError(ValueError):
+class AlreadyTranscribedError(HakiScribeError, ValueError):
     """Recording already has a persisted transcript; nothing was written."""
 
+    code = "already_transcribed"
 
-class TranscriptionLockedError(ValueError):
+
+class TranscriptionLockedError(HakiScribeError, ValueError):
     """Replace refused: flags/corrections exist or provenance is locked."""
+
+    code = "transcription_locked"
 
 
 def _insert_segment_row(conn, recording_id: int, seg: dict) -> int:

@@ -2,6 +2,7 @@
 
 Streamlit UI only. Step content lives in frontend/views/; this module owns
 page config, theme, sidebar, session init, stepper, progress, and routing.
+The workflow snapshot is rebuilt from the database on every render.
 """
 
 import streamlit as st
@@ -13,11 +14,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend.services import workflow_service
 from frontend import state
 from frontend.components.about_page import render_about
-from frontend.components.stepper import can_access_step, render_stepper
+from frontend.components.errors import show_error
+from frontend.components.stepper import can_access_snapshot, render_stepper
 from frontend.theme import apply_theme
 from frontend.views import export_view, review_view, transcribe_view, upload_view
+
+_STATUS_DOT = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}
 
 
 def _safe_toast(message: str) -> None:
@@ -30,6 +35,19 @@ def _safe_toast(message: str) -> None:
         pass
 
 
+def _render_system_check() -> None:
+    """Render the collapsed sidebar health expander; never raises."""
+    with st.sidebar.expander("System check", expanded=False):
+        try:
+            checks = workflow_service.get_system_status()
+        except Exception as exc:
+            show_error(exc)
+            return
+        for check in checks:
+            dot = _STATUS_DOT.get(check.status, "⚪")
+            st.write(f"{dot} {check.name}: {check.message}")
+
+
 st.set_page_config(page_title="HakiScribe-AI Review Desk", layout="wide")
 apply_theme()
 
@@ -40,7 +58,7 @@ st.warning(
     "This is not an official court record."
 )
 
-reviewer = st.sidebar.text_input("Reviewer name", value="")
+reviewer = st.sidebar.text_input("Reviewer name", value="", key="reviewer_name")
 st.sidebar.markdown(
     "**Workflow**\n"
     "1. Upload\n"
@@ -48,6 +66,7 @@ st.sidebar.markdown(
     "3. Review Desk (next)\n"
     "4. Draft Export (next)"
 )
+_render_system_check()
 st.sidebar.divider()
 if st.sidebar.button("About Us", key="about_us_button"):
     st.session_state[state.SHOW_ABOUT] = True
@@ -59,10 +78,27 @@ if st.session_state.get(state.SHOW_ABOUT, False):
     render_about()
     st.stop()
 
+try:
+    snapshot = workflow_service.get_snapshot(
+        st.session_state.get(state.RECORDING_ID)
+    )
+except Exception as exc:
+    show_error(exc)
+    snapshot = None
+st.session_state[state.SNAPSHOT] = snapshot
+
+if st.session_state.get(state.RECORDING_ID) is not None and snapshot is None:
+    st.session_state[state.RECORDING_ID] = None
+    st.session_state[state.CURRENT_STEP] = "upload"
+    st.session_state[state.STALE_NOTICE] = True
+
+if st.session_state.pop(state.STALE_NOTICE, False):
+    st.info("Previous recording is no longer available. Starting a fresh upload.")
+
 render_stepper(st.session_state[state.CURRENT_STEP])
 
-has_recording = st.session_state.get(state.RECORDING_ID) is not None
-has_transcript = st.session_state.get(state.TRANSCRIPT_STATUS) is not None
+has_recording = snapshot is not None
+has_transcript = bool(snapshot and snapshot.transcript_status == "present")
 
 if has_transcript and st.session_state[state.CURRENT_STEP] == "export":
     workflow_progress, workflow_step_num = 1.0, 4
@@ -85,7 +121,7 @@ nav_targets = [
 nav_columns = st.columns(4)
 for nav_column, (target_step, nav_label) in zip(nav_columns, nav_targets):
     if nav_column.button(nav_label):
-        allowed, reason = can_access_step(target_step, has_recording, has_transcript)
+        allowed, reason = can_access_snapshot(target_step, snapshot)
         if allowed:
             st.session_state[state.CURRENT_STEP] = target_step
             st.rerun()
@@ -108,15 +144,15 @@ if notice:
 
 def _render_upload_and_transcribe() -> None:
     """Upload and transcribe steps share the card + recording panels."""
-    upload_view.render(reviewer)
-    transcribe_view.render()
+    upload_view.render(reviewer, snapshot)
+    transcribe_view.render(snapshot)
 
 
 VIEWS = {
     "upload": _render_upload_and_transcribe,
     "transcribe": _render_upload_and_transcribe,
-    "review": review_view.render,
-    "export": export_view.render,
+    "review": lambda: review_view.render(snapshot),
+    "export": lambda: export_view.render(snapshot),
 }
 
 step = st.session_state[state.CURRENT_STEP]

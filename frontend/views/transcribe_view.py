@@ -3,17 +3,10 @@
 import streamlit as st
 
 from backend.core.config import is_configured
-from backend.services.ingestion_service import get_recording_or_raise
-from backend.services.transcription_service import (
-    AlreadyTranscribedError,
-    AudioPrepError,
-    TranscriptionError,
-    TranscriptionInProgressError,
-    TranscriptionLockedError,
-    get_transcript,
-    transcribe_recording,
-)
+from backend.services import workflow_service
+from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
+from frontend.components.errors import show_error
 from frontend.components.transcript_card import (
     LOW_CONFIDENCE_THRESHOLD,
     render_segment_card,
@@ -27,27 +20,10 @@ def _reset_draft_edit(segment_id: int) -> None:
     st.session_state.pop(f"draft_edit_{segment_id}", None)
 
 
-def _render_source_badge(recording_id: int, status: str | None) -> None:
-    """Show the transcript source from the recording row as a clear badge."""
-    if status is None:
-        return
-    try:
-        fresh = get_recording_or_raise(recording_id)
-    except ValueError:
-        fresh = {}
-    source = (fresh.get("transcription_source") if fresh else None) or (
-        "real" if status == "real" else "mock"
-    )
-    if source == "real":
-        st.success("Real: Muse Voice Transcribe")
-    else:
-        st.info("MOCK: demo only")
-
-
-def render() -> None:
+def render(snapshot: WorkflowSnapshot | None) -> None:
     """Render the recording panel and transcript (upload/transcribe steps)."""
     step = st.session_state[state.CURRENT_STEP]
-    recording = st.session_state[state.RECORDING]
+    recording = snapshot.recording if snapshot is not None else None
     if recording is not None and step in ("upload", "transcribe"):
         st.divider()
         st.header("Recording")
@@ -62,38 +38,48 @@ def render() -> None:
             st.info("Audio preview is unavailable for this recording.")
 
         st.header("2. Transcribe")
+        default_mock = st.session_state.get(state.MOCK_MODE)
+        if default_mock is None:
+            default_mock = not is_configured()
         use_mock = st.checkbox(
-            "Use mock demo mode (no Meta API call)", value=not is_configured()
+            "Use mock demo mode (no Meta API call)", value=default_mock
         )
+        st.session_state[state.MOCK_MODE] = use_mock
         transcribing = st.session_state.get(state.TRANSCRIBING, False)
-        if st.button("Transcribe Recording", type="primary", disabled=transcribing):
+        if st.button(
+            "Transcribe Recording",
+            type="primary",
+            disabled=transcribing,
+            key="transcribe_recording",
+        ):
             st.session_state[state.TRANSCRIBING] = True
             try:
-                result = transcribe_recording(
+                result = workflow_service.transcribe(
                     recording["id"], force_mock=use_mock
                 )
-            except TranscriptionInProgressError:
-                st.info("A transcription for this recording is already running. Wait a moment, then retry.")
-            except (AlreadyTranscribedError, TranscriptionLockedError) as exc:
-                st.info(f"{exc} Showing saved segments.")
-                st.session_state[state.TRANSCRIPT_STATUS] = "already_transcribed"
-            except (ValueError, TranscriptionError, AudioPrepError) as exc:
-                st.error(str(exc))
+            except Exception as exc:
+                show_error(exc)
             else:
-                st.session_state[state.TRANSCRIPT_STATUS] = result["status"]
+                if result.get("status") == "already_transcribed":
+                    st.info("Already transcribed — showing saved segments.")
+                else:
+                    st.rerun()
             finally:
                 st.session_state[state.TRANSCRIBING] = False
 
-        status = st.session_state[state.TRANSCRIPT_STATUS]
-        if status == "real":
+        has_transcript = snapshot.transcript_status == "present"
+        source = snapshot.source or "mock"
+        if has_transcript and source == "real":
             st.success("REAL Meta call — Muse Voice Transcribe via Meta Model API.")
-        elif isinstance(status, str) and status.startswith("mock"):
+        elif has_transcript:
             st.info("MOCK synthetic demo — no Meta API call was made.")
-        elif status == "already_transcribed":
-            st.info("Already transcribed — showing saved segments.")
-        _render_source_badge(recording["id"], status)
+        if has_transcript:
+            if source == "real":
+                st.success("Real: Muse Voice Transcribe")
+            else:
+                st.info("MOCK: demo only")
 
-        segments = get_transcript(recording["id"])
+        segments = list(snapshot.segments)
         if segments:
             st.info(
                 "Original AI text is preserved. Draft edits in this UI preview "

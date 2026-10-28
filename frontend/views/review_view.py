@@ -2,19 +2,17 @@
 
 import streamlit as st
 
-from backend.services.transcription_service import get_transcript
+from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
 from frontend.components.transcript_card import LOW_CONFIDENCE_THRESHOLD
 
 
-def render() -> None:
-    """Render the Review Desk preview from the session transcript."""
+def render(snapshot: WorkflowSnapshot | None) -> None:
+    """Render the Review Desk preview from the workflow snapshot."""
     st.header("3. Review Desk")
     st.info("Interactive preview - backend workflow connects in the next backend step.")
-    review_recording = st.session_state.get(state.RECORDING)
-    review_segments = (
-        get_transcript(review_recording["id"]) if review_recording else []
-    )
+    review_recording = snapshot.recording if snapshot is not None else None
+    review_segments = list(snapshot.segments) if snapshot is not None else []
     if not review_recording:
         st.info("No recording yet. Upload a synthetic hearing first.")
         if st.button("Go to Upload", type="primary", key="review_empty_go_upload"):

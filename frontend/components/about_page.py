@@ -8,7 +8,7 @@ for Quick Links) and nothing else.
 import streamlit as st
 
 from frontend import state
-from frontend.components.stepper import can_access_step
+from frontend.components.stepper import can_access_snapshot
 
 HERO_TITLE = "Karibu HakiScribe"
 HAKI_NOTE = '"Haki" means justice in Kiswahili.'
@@ -143,10 +143,9 @@ FOOTER_BOTTOM = (
 
 def _go_to_workflow(step_key: str) -> None:
     """Return to the workflow, applying the step only if guards allow."""
-    has_recording = st.session_state.get(state.RECORDING_ID) is not None
-    has_transcript = st.session_state.get(state.TRANSCRIPT_STATUS) is not None
+    snapshot = st.session_state.get(state.SNAPSHOT)
     st.session_state[state.SHOW_ABOUT] = False
-    allowed, _reason = can_access_step(step_key, has_recording, has_transcript)
+    allowed, _reason = can_access_snapshot(step_key, snapshot)
     if allowed:
         st.session_state[state.CURRENT_STEP] = step_key
     st.rerun()

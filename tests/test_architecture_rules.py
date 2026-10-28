@@ -8,6 +8,8 @@ Layer rules enforced on every project .py file:
   (tests/ are exempt: they verify the layers directly).
 - Only backend/integrations/, extras/ and scripts/ may import requests.
 - No module may import the deleted src package.
+- frontend/ may import backend only from backend.services and backend.core.
+- frontend/views/ must import workflow_service, not other service modules.
 """
 
 import ast
@@ -46,6 +48,16 @@ def _imported_modules(path: Path) -> set[str]:
 def _scan():
     """Map relative path -> imported modules for every project .py file."""
     return {rel: _imported_modules(path) for rel, path in _iter_py_files()}
+
+
+def _from_imports(path: Path) -> list[tuple[str, list[str]]]:
+    """(module, names) pairs from ImportFrom nodes, including local ones."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    pairs = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            pairs.append((node.module, [alias.name for alias in node.names]))
+    return pairs
 
 
 def _is_within(mod: str, package: str) -> bool:
@@ -106,6 +118,46 @@ def test_no_src_imports_anywhere():
         for mod in sorted(modules):
             if _is_within(mod, "src"):
                 offenders.append(f"{rel} imports {mod}")
+    assert offenders == []
+
+
+def test_frontend_backend_imports_only_services_and_core():
+    offenders = []
+    for rel, modules in _scan().items():
+        if not rel.startswith("frontend/"):
+            continue
+        for mod in sorted(modules):
+            if not mod.startswith("backend"):
+                continue
+            if not (
+                _is_within(mod, "backend.services")
+                or _is_within(mod, "backend.core")
+            ):
+                offenders.append(f"{rel} imports {mod}")
+    assert offenders == []
+
+
+def test_views_use_workflow_service_facade():
+    offenders = []
+    for rel, path in _iter_py_files():
+        if not rel.startswith("frontend/views/"):
+            continue
+        if rel.endswith("__init__.py"):
+            continue
+        modules = _imported_modules(path)
+        if "backend.services.workflow_service" not in modules and (
+            "backend.services" not in modules
+        ):
+            offenders.append(f"{rel} does not import workflow_service")
+        for mod, names in _from_imports(path):
+            if mod == "backend.services":
+                for name in names:
+                    if name != "workflow_service":
+                        offenders.append(f"{rel} imports {mod}.{name} directly")
+            elif mod.startswith("backend.services.") and (
+                mod != "backend.services.workflow_service"
+            ):
+                offenders.append(f"{rel} imports {mod} directly")
     assert offenders == []
 
 

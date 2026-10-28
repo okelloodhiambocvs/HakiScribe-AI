@@ -48,6 +48,31 @@ def can_access_step(
     return (False, f"Unknown step: {step_key}")
 
 
+def can_access_snapshot(step_key: str, snapshot) -> tuple[bool, str]:
+    """Guard navigation from snapshot booleans; None snapshot denies all.
+
+    Takes the WorkflowSnapshot without importing it, so this component
+    stays backend-free. Reasons match can_access_step exactly.
+    """
+    if step_key == "upload":
+        return (True, "")
+    if snapshot is None:
+        return can_access_step(step_key, False, False)
+    if step_key == "transcribe":
+        if snapshot.can_transcribe:
+            return (True, "")
+        return (False, "Upload a synthetic recording first")
+    if step_key == "review":
+        if snapshot.can_review:
+            return (True, "")
+        return (False, "Transcribe the recording first")
+    if step_key == "export":
+        if snapshot.can_export:
+            return (True, "")
+        return (False, "Complete transcription and review first")
+    return (False, f"Unknown step: {step_key}")
+
+
 def _step_style(key: str, current_step: str) -> tuple[str, str, str]:
     """Return (background, text color, border) for a step pill."""
     current_idx = get_step_index(current_step)

@@ -9,6 +9,7 @@ import json
 import threading
 from pathlib import Path
 
+from backend.core.errors import HakiScribeError
 from backend.integrations.meta import voice_transcribe
 from backend.integrations.meta.audio_prep import AudioPrepError  # noqa: F401 (re-export)
 from backend.integrations.meta.voice_transcribe import (  # noqa: F401 (re-export)
@@ -33,8 +34,10 @@ __all__ = [
 ]
 
 
-class TranscriptionInProgressError(ValueError):
+class TranscriptionInProgressError(HakiScribeError, ValueError):
     """A transcription call for this recording is already running here."""
+
+    code = "transcription_in_progress"
 
 
 _transcribe_lock = threading.Lock()
@@ -121,7 +124,11 @@ def transcribe_recording(
     with _transcribe_lock:
         if key in _transcribe_in_flight:
             raise TranscriptionInProgressError(
-                f"transcription already in progress for recording {recording_id}"
+                f"transcription already in progress for recording {recording_id}",
+                user_message=(
+                    "A transcription for this recording is already running. "
+                    "Wait a moment, then retry."
+                ),
             )
         _transcribe_in_flight.add(key)
     try:

@@ -16,3 +16,4 @@ Old exploration repo for transparency: https://github.com/okelloodhiambocvs/Haki
 - [x] Step 11: Defined V2 layered architecture (frontend/backend/database) and deferred scope, Kenyan speakers + EN/SW code-switch locked, docs only
 - [x] Step 12: Created V2 frontend/backend/database skeleton with config shim, old src kept working, 32 tests passed
 - [x] Step 13: Added SQLite schema and repositories for recordings, segments, flags, corrections and exports, 38 tests passed
+- [x] Step 14: Added validated upload, Muse Voice Transcribe integration with mock fallback, persisted transcript, and V2 upload/transcribe frontend

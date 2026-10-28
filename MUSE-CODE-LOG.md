@@ -15,3 +15,4 @@
 | 2026-10-28 | Draft ARCHITECTURE-V2 and SCOPE-V2 for judge workflow | Muse draft, manually replaced with locked verified docs | docs/architecture/ARCHITECTURE-V2.md, docs/SCOPE-V2.md |
 | 2026-10-28 | Create V2 layered skeleton frontend/backend/database and backend core config shim | Muse created skeleton, human reviewed diff and tested | frontend/, backend/, database/, storage/, extras/ |
 | 2026-10-28 | Create SQLite schema, repositories and database tests for traceable corrections | Muse generated database layer, human reviewed diffs and ran tests | database/db.py, database/schema.py, backend/repositories/, tests/test_database_v2.py |
+| 2026-10-28 | Create ingestion service, Muse Voice transcription integration/service and V2 upload frontend | Muse generated V2 Priority 1 workflow, human reviewed diffs and tested | backend/services/ingestion_service.py, backend/integrations/meta/voice_transcribe.py, backend/services/transcription_service.py, frontend/app.py |

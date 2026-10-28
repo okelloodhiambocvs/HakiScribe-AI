@@ -21,7 +21,7 @@ from backend.services.transcription_service import (
     get_transcript,
     transcribe_recording,
 )
-from frontend.components.stepper import render_stepper
+from frontend.components.stepper import can_access_step, render_stepper
 from frontend.components.transcript_card import render_segment_card
 from frontend.theme import apply_theme
 
@@ -71,6 +71,16 @@ def _clear_upload_state() -> None:
     st.session_state["current_step"] = "upload"
 
 
+def _safe_toast(message: str) -> None:
+    """Show a toast when supported; never crash older Streamlit versions."""
+    try:
+        toast = getattr(st, "toast", None)
+        if callable(toast):
+            toast(message)
+    except Exception:
+        pass
+
+
 st.set_page_config(page_title="HakiScribe-AI Review Desk", layout="wide")
 apply_theme()
 
@@ -107,19 +117,36 @@ if "show_low_confidence_only" not in st.session_state:
 
 render_stepper(st.session_state["current_step"])
 
-nav_upload, nav_transcribe, nav_review, nav_export = st.columns(4)
-if nav_upload.button("Upload"):
-    st.session_state["current_step"] = "upload"
-    st.rerun()
-if nav_transcribe.button("Transcribe"):
-    st.session_state["current_step"] = "transcribe"
-    st.rerun()
-if nav_review.button("Review Desk"):
-    st.session_state["current_step"] = "review"
-    st.rerun()
-if nav_export.button("Draft & Evaluation"):
-    st.session_state["current_step"] = "export"
-    st.rerun()
+has_recording = st.session_state.get("recording_id") is not None
+has_transcript = st.session_state.get("transcript_status") is not None
+
+if has_transcript and st.session_state["current_step"] == "export":
+    workflow_progress, workflow_step_num = 1.0, 4
+elif has_transcript:
+    workflow_progress, workflow_step_num = 0.75, 3
+elif has_recording:
+    workflow_progress, workflow_step_num = 0.50, 2
+else:
+    workflow_progress, workflow_step_num = 0.25, 1
+st.write(f"Workflow progress: Step {workflow_step_num} of 4")
+st.progress(workflow_progress)
+st.caption("Workflow position only — not transcription accuracy.")
+
+nav_targets = [
+    ("upload", "Upload"),
+    ("transcribe", "Transcribe"),
+    ("review", "Review Desk"),
+    ("export", "Draft & Evaluation"),
+]
+nav_columns = st.columns(4)
+for nav_column, (target_step, nav_label) in zip(nav_columns, nav_targets):
+    if nav_column.button(nav_label):
+        allowed, reason = can_access_step(target_step, has_recording, has_transcript)
+        if allowed:
+            st.session_state["current_step"] = target_step
+            st.rerun()
+        else:
+            st.warning(reason)
 
 st.divider()
 
@@ -128,6 +155,7 @@ step = st.session_state["current_step"]
 notice = st.session_state.get("upload_notice")
 if notice:
     st.success("Recording validated and stored.")
+    _safe_toast("Recording stored successfully")
     st.info(
         f"File: {notice['filename']} | "
         f"Size: {notice['size_bytes']} bytes | "
@@ -149,7 +177,6 @@ if step in ("upload", "transcribe"):
     attested = upload_box.checkbox(
         "I confirm this is a synthetic demo recording with no real litigants"
     )
-    has_recording = st.session_state.get("recording_id") is not None
     if uploaded is None and not has_recording:
         upload_box.info(
             "No recording yet. Upload a short synthetic hearing, "
@@ -217,7 +244,7 @@ if recording is not None and step in ("upload", "transcribe"):
     use_mock = st.checkbox(
         "Use mock demo mode (no Meta API call)", value=not is_configured()
     )
-    if st.button("Transcribe Recording"):
+    if st.button("Transcribe Recording", type="primary"):
         try:
             result = transcribe_recording(
                 recording["id"], force_mock=use_mock
@@ -294,35 +321,39 @@ if recording is not None and step in ("upload", "transcribe"):
             (item for item in segments if item["idx"] == selected_idx), None
         )
         if selected is not None:
-            st.subheader("Selected segment")
-            st.write(f"speaker: {selected['speaker']}")
-            st.write(f"start_sec: {selected['start_sec']}")
-            st.write(f"end_sec: {selected['end_sec']}")
-            st.write(f"confidence: {selected['confidence']}")
-            st.write(f"language: {selected['language']}")
-            st.text_area(
+            detail_box = st.container(border=True)
+            detail_box.subheader("Selected segment")
+            detail_box.write(f"speaker: {selected['speaker']}")
+            detail_box.write(f"start_sec: {selected['start_sec']}")
+            detail_box.write(f"end_sec: {selected['end_sec']}")
+            detail_box.write(f"confidence: {selected['confidence']}")
+            detail_box.write(f"language: {selected['language']}")
+            detail_box.text_area(
                 "Original AI text",
                 value=selected["text_original"],
                 disabled=True,
                 key=f"original_text_{selected['id']}",
             )
             drafts = st.session_state.setdefault("draft_edits", {})
-            st.text_area(
+            detail_box.text_area(
                 "Current text (draft)",
                 value=drafts.get(selected["id"], selected["text_current"]),
                 key=f"draft_edit_{selected['id']}",
             )
-            if st.button("Save Draft Edit (UI only)"):
+            if detail_box.button("Save Draft Edit (UI only)"):
                 drafts[selected["id"]] = st.session_state[f"draft_edit_{selected['id']}"]
-                st.success("Draft edit saved locally - backend correction saving connects in the next backend step")
-            st.button("Reset Edit", on_click=_reset_draft_edit, args=(selected["id"],))
+                detail_box.success("Draft edit saved locally - backend correction saving connects in the next backend step")
+            detail_box.button("Reset Edit", on_click=_reset_draft_edit, args=(selected["id"],))
     else:
-        st.info("No transcript yet. Upload and transcribe a synthetic recording first.")
-        if st.button("Go to Upload"):
+        st.info("No transcript yet. Press Transcribe Recording to create one from this recording.")
+        if st.button("Go to Upload", key="no_segments_go_upload"):
             st.session_state["current_step"] = "upload"
             st.rerun()
 elif step == "transcribe":
-    st.info("Upload and validate a recording first.")
+    st.info("No recording yet. Upload and validate a synthetic recording first.")
+    if st.button("Go to Upload", type="primary", key="no_recording_go_upload"):
+        st.session_state["current_step"] = "upload"
+        st.rerun()
 
 if step == "review":
     st.header("3. Review Desk")
@@ -331,10 +362,15 @@ if step == "review":
     review_segments = (
         get_transcript(review_recording["id"]) if review_recording else []
     )
-    if not review_recording or not review_segments:
-        st.info("No transcript in this session yet. Upload and transcribe first.")
-        if st.button("Go to Upload"):
+    if not review_recording:
+        st.info("No recording yet. Upload a synthetic hearing first.")
+        if st.button("Go to Upload", type="primary", key="review_empty_go_upload"):
             st.session_state["current_step"] = "upload"
+            st.rerun()
+    elif not review_segments:
+        st.info("No transcript yet. Transcribe the recording first.")
+        if st.button("Go to Transcribe", type="primary", key="review_empty_go_transcribe"):
+            st.session_state["current_step"] = "transcribe"
             st.rerun()
     else:
         st.subheader("Session summary")
@@ -391,20 +427,32 @@ if step == "review":
 if step == "export":
     st.header("4. Draft & Evaluation")
     st.info("Interactive preview - backend workflow connects in the next backend step.")
-    st.markdown(
-        '<div class="draft-watermark">'
-        "DRAFT - NOT AN OFFICIAL COURT RECORD - HUMAN REVIEWED"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.subheader("Original vs Reviewed (preview)")
-    eval_wer, eval_cer, eval_changed, eval_flags = st.columns(4)
-    eval_wer.metric("Word Error Rate", "—")
-    eval_cer.metric("Character Error Rate", "—")
-    eval_changed.metric("Segments changed", "—")
-    eval_flags.metric("Flags resolved", "—")
-    st.caption("Preview placeholders — real scores connect with the backend evaluation step.")
-    st.divider()
-    st.subheader("Actions")
-    if st.button("Generate DOCX Draft (Backend Next)", type="secondary"):
-        st.info("DOCX generation connects in the backend step. No file is generated in this preview.")
+    if not has_recording:
+        st.info("No recording yet. Upload a synthetic hearing first.")
+        if st.button("Go to Upload", type="primary", key="export_empty_go_upload"):
+            st.session_state["current_step"] = "upload"
+            st.rerun()
+    elif not has_transcript:
+        st.info("No transcript yet. Transcribe the recording first.")
+        if st.button("Go to Transcribe", type="primary", key="export_empty_go_transcribe"):
+            st.session_state["current_step"] = "transcribe"
+            st.rerun()
+    else:
+        st.markdown(
+            '<div class="draft-watermark">'
+            "DRAFT - NOT AN OFFICIAL COURT RECORD - HUMAN REVIEWED"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.subheader("Original vs Reviewed (preview)")
+        eval_box = st.container(border=True)
+        eval_wer, eval_cer, eval_changed, eval_flags = eval_box.columns(4)
+        eval_wer.metric("Word Error Rate", "—")
+        eval_cer.metric("Character Error Rate", "—")
+        eval_changed.metric("Segments changed", "—")
+        eval_flags.metric("Flags resolved", "—")
+        eval_box.caption("Preview placeholders — real scores connect with the backend evaluation step.")
+        st.divider()
+        st.subheader("Actions")
+        if st.button("Generate DOCX Draft (Backend Next)", type="secondary"):
+            st.info("DOCX generation connects in the backend step. No file is generated in this preview.")

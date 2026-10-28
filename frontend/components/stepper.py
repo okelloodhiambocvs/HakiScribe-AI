@@ -23,6 +23,31 @@ def get_step_index(step_key: str) -> int:
     return order.index(step_key) if step_key in order else 0
 
 
+def can_access_step(
+    step_key: str, has_recording: bool, has_transcript: bool
+) -> tuple[bool, str]:
+    """Return (allowed, reason) for navigating to a workflow step.
+
+    The reason names the missing prerequisite, or "" when allowed.
+    Unknown steps are denied.
+    """
+    if step_key == "upload":
+        return (True, "")
+    if step_key == "transcribe":
+        if has_recording:
+            return (True, "")
+        return (False, "Upload a synthetic recording first")
+    if step_key == "review":
+        if has_transcript:
+            return (True, "")
+        return (False, "Transcribe the recording first")
+    if step_key == "export":
+        if has_transcript:
+            return (True, "")
+        return (False, "Complete transcription and review first")
+    return (False, f"Unknown step: {step_key}")
+
+
 def _step_style(key: str, current_step: str) -> tuple[str, str, str]:
     """Return (background, text color, border) for a step pill."""
     current_idx = get_step_index(current_step)

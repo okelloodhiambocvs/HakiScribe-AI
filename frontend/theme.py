@@ -43,6 +43,10 @@ section[data-testid="stSidebar"] { background-color: $deep_green; }
 section[data-testid="stSidebar"] * { color: $cream_bg !important; }
 h1, h2 { color: $primary_dark_green !important; }
 div[data-testid="stAppViewContainer"] p { color: $text_dark; }
+div[data-testid="stAppViewContainer"] small,
+div[data-testid="stAppViewContainer"] div[data-testid="stCaptionContainer"] * {
+    color: $text_dark !important;
+}
 button[kind="primary"] {
     background-color: $primary_dark_green;
     color: #FFFFFF;
@@ -66,6 +70,22 @@ button[kind="secondary"] {
     padding: 1rem 1.25rem;
     margin-bottom: 1rem;
 }
+.hakiscibe-card {
+    background-color: $card_bg;
+    border: 1px solid $accent_light;
+    border-top: 3px solid $accent_gold_brown;
+    border-radius: 0.75rem;
+    box-shadow: 0 1px 4px rgba(8, 46, 33, 0.12);
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: $card_bg;
+    border: 1px solid $accent_light !important;
+    border-top: 3px solid $accent_gold_brown !important;
+    border-radius: 0.75rem;
+    box-shadow: 0 1px 4px rgba(8, 46, 33, 0.12);
+}
 details { border-radius: 0.5rem; }
 div[data-testid="stMetric"] {
     background-color: $card_bg;
@@ -86,7 +106,7 @@ div[data-testid="stAlert"] * {
 }
 .draft-watermark {
     background-color: $cream_bg;
-    border: 3px double $accent_gold_brown;
+    border: 2px dashed $accent_gold_brown;
     color: $primary_dark_green;
     font-weight: 800;
     text-align: center;
@@ -97,16 +117,21 @@ div[data-testid="stAlert"] * {
 button[kind="secondary"]:hover {
     border: 2px solid $primary_dark_green;
 }
-button:focus-visible {
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
     outline: 3px solid $accent_gold_brown;
     outline-offset: 2px;
+    box-shadow: 0 0 0 2px $primary_dark_green;
 }
 @media (max-width: 768px) {
     .block-container { padding: 1rem 0.75rem; }
-    div[data-testid="column"] { min-width: 100% !important; }
-    .hakiscribe-card { padding: 0.75rem; }
+    div[data-testid="column"] { min-width: 100% !important; margin-bottom: 0.5rem; }
+    .hakiscribe-card, .hakiscibe-card { padding: 0.75rem; }
     h1 { font-size: 1.75rem !important; }
     h2 { font-size: 1.4rem !important; }
+    h3 { font-size: 1.2rem !important; }
     button[kind="primary"], button[kind="secondary"] { width: 100%; }
 }
 </style>

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from backend.integrations.meta import voice_transcribe
+from backend.integrations.meta.voice_transcribe import TranscriptionError
 from backend.repositories import segments_repo
 from backend.services.ingestion_service import get_recording_or_raise
 

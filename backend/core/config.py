@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 META_API_KEY = os.getenv("META_API_KEY", "")
-META_API_BASE = os.getenv("META_API_BASE", "https://dev.meta.ai/model-api/v1")
-META_VOICE_MODEL = os.getenv("META_VOICE_MODEL", "muse-voice-transcribe")
+META_API_BASE = os.getenv("META_API_BASE", "https://api.meta.ai/v1")
+META_VOICE_MODEL = os.getenv("META_VOICE_MODEL", "muse-voice-transcribe-1.0")
 META_REASONING_MODEL = os.getenv("META_REASONING_MODEL", "muse-spark")
 META_WONDER_MODEL = os.getenv("META_WONDER_MODEL", "muse-wonder")
 META_SAM_MODEL = os.getenv("META_SAM_MODEL", "sam-3.1")

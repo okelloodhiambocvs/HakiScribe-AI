@@ -15,7 +15,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 from backend.core.config import is_configured
 from backend.services.ingestion_service import validate_and_store_upload
-from backend.services.transcription_service import get_transcript, transcribe_recording
+from backend.integrations.meta.audio_prep import AudioPrepError
+from backend.services.transcription_service import (
+    TranscriptionError,
+    get_transcript,
+    transcribe_recording,
+)
 
 CONFIDENCE_THRESHOLD = 0.75
 
@@ -113,7 +118,7 @@ if recording is not None:
             result = transcribe_recording(
                 recording["id"], force_mock=use_mock
             )
-        except ValueError as exc:
+        except (ValueError, TranscriptionError, AudioPrepError) as exc:
             st.error(str(exc))
         else:
             st.session_state["transcript_status"] = result["status"]

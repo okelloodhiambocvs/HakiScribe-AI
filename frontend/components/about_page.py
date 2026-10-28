@@ -13,29 +13,45 @@ from frontend.components.stepper import can_access_step
 HERO_TITLE = "Karibu HakiScribe"
 HAKI_NOTE = '"Haki" means justice in Kiswahili.'
 HERO_INTRO = (
-    "HakiScribe is an AI-assisted review desk that turns hearing recordings "
-    "into draft transcripts. A human reviewer checks and corrects every "
-    "line, and every change is recorded."
+    "HakiScribe is a prototype review desk that turns a hearing recording "
+    "into a draft transcript which a person reviews and corrects, with "
+    "every change recorded. Its purpose is to reduce avoidable delay in "
+    "preparing accurate court records."
 )
 
 PROBLEM_HEADING = "The Problem"
 PROBLEM_PARAGRAPHS = (
-    "Court hearings produce long audio recordings, and turning them into a written record takes serious effort.",
-    "HakiScribe is built for the gap between a raw recording and a record a human can trust: accurate, traceable, and honest about what is still a draft.",
+    "When preparing, processing and sharing court proceedings depends on manual documentation and transcription, timely access to justice suffers. Judicial officers and court staff struggle to keep pace with recording hearings, preparing proceedings and judgments, and answering document requests.",
+    "Delays hurt appellants and advocates who need records in time to move an appeal forward; for short custodial sentences, waiting can shrink what a successful appeal is worth. People of limited means face further barriers from repeated court visits and hard-to-find information. Technology cannot remove every cause of delay, but better digital tools can cut avoidable bottlenecks and keep records accurate, available and accountable — while protecting judicial independence, fairness, confidentiality and the integrity of official records.",
 )
 PROBLEM_CARDS = (
     (
-        "ACCURACY",
-        "Machine transcripts contain errors in names, numbers and legal terms.",
+        "DELAYS",
+        "Manual documentation and transcription slow the preparation of proceedings and records.",
         "green",
     ),
-    ("LANGUAGE", "Hearings mix Kiswahili and English.", "gold"),
     (
-        "TRACEABILITY",
-        "Changes to a record must show who changed what, when and why.",
+        "APPEALS",
+        "Appellants and advocates need timely records; delay can mean time in custody while an appeal waits.",
+        "gold",
+    ),
+    (
+        "WORKLOAD",
+        "Judicial officers and court staff balance recording hearings, preparing proceedings and answering document requests.",
         "amber",
     ),
-    ("TIME", "Manual transcription is slow.", "dark"),
+    (
+        "TRUST",
+        "Records must stay accurate, confidential and traceable.",
+        "dark",
+    ),
+)
+AFFECTED_LABEL = "Who is affected"
+AFFECTED_CHIPS = (
+    "Judicial officers",
+    "Court clerks and registry staff",
+    "Advocates",
+    "Litigants and appellants",
 )
 
 APPROACH_HEADING = "Our Approach"
@@ -44,9 +60,12 @@ APPROACH_TEXT = (
     "The AI drafts; the reviewer checks, corrects, and owns every decision.",
 )
 APPROACH_CHECKLIST = (
-    "A human always decides.",
-    "The original AI transcript is never overwritten, and every correction records who, when and why.",
-    "Synthetic data only. Drafts are not certified records and give no legal advice.",
+    "A person always decides, and the tool never makes legal decisions.",
+    "The original machine transcript is never overwritten.",
+    "Every correction records who, when and why.",
+    "Unresolved issues stay visible.",
+    "This prototype uses synthetic data only.",
+    "Supports judicial independence and procedural fairness by assisting staff, not replacing judgment.",
 )
 APPROACH_SVG = (
     '<svg width="72" height="72" viewBox="0 0 72 72" role="img" '
@@ -84,8 +103,28 @@ SOLUTION_CARDS = (
     },
 )
 
+SCOPE_HEADING = "Scope of this prototype"
+SCOPE_BUILT_HEADING = "Built here"
+SCOPE_BUILT_TEXT = (
+    "Capture and verification of a hearing transcript: "
+    "upload, transcribe, review, correct, draft export."
+)
+SCOPE_BEYOND_HEADING = "Beyond this prototype"
+BEYOND_PROTOTYPE = (
+    ("request tracking", "Not built"),
+    ("deadline alerts", "Not built"),
+    ("certification and digital signatures", "Not built"),
+    ("authorised access to court documents", "Not built"),
+    ("integration with judiciary systems", "Not built"),
+)
+SCOPE_VISION_NOTE = "Part of the wider vision — not features of this prototype."
+SCOPE_NOTICE = (
+    "Not legal advice. No appeal-eligibility or sentencing decisions. "
+    "Draft transcripts are not certified records."
+)
+
 FOOTER_BRAND = "HakiScribe"
-FOOTER_MISSION = "Clarity in every proceeding — drafts a human reviews."
+FOOTER_MISSION = "Reducing avoidable delay in preparing accurate court records."
 FOOTER_QUICK_LINKS = (
     ("upload", "Upload"),
     ("transcribe", "Transcribe"),
@@ -93,6 +132,9 @@ FOOTER_QUICK_LINKS = (
     ("export", "Draft & Evaluation"),
 )
 FOOTER_CONTACT = "[Add team names and contact]"
+FOOTER_LINKS_HEADING = "Quick Links"
+FOOTER_MODELS_HEADING = "Models and Data"
+FOOTER_CONTACT_HEADING = "Contact"
 FOOTER_BOTTOM = (
     "© 2026 HakiScribe AI. Hackathon prototype. "
     "Draft transcripts only; not a certified record."
@@ -137,6 +179,15 @@ def _render_problem() -> None:
             f"<p>{text}</p></div>",
             unsafe_allow_html=True,
         )
+    st.markdown(
+        f'<p class="about-affected-label">{AFFECTED_LABEL}</p>'
+        '<div class="about-chips">'
+        + "".join(
+            f'<span class="about-chip">{chip}</span>' for chip in AFFECTED_CHIPS
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_approach() -> None:
@@ -182,6 +233,33 @@ def _render_solution() -> None:
         )
 
 
+def _render_scope() -> None:
+    st.markdown(
+        f'<div class="about-section"><h2 class="about-center">{SCOPE_HEADING}</h2></div>',
+        unsafe_allow_html=True,
+    )
+    built_col, beyond_col = st.columns(2)
+    with built_col:
+        st.markdown(
+            f'<div class="about-scope-card"><h3>{SCOPE_BUILT_HEADING}</h3>'
+            f"<p>{SCOPE_BUILT_TEXT}</p></div>",
+            unsafe_allow_html=True,
+        )
+    with beyond_col:
+        items = "".join(
+            f'<p class="about-beyond-item">{text}'
+            f'<span class="about-notbuilt">{label}</span></p>'
+            for text, label in BEYOND_PROTOTYPE
+        )
+        st.markdown(
+            f'<div class="about-scope-card"><h3>{SCOPE_BEYOND_HEADING}</h3>'
+            f"{items}"
+            f'<p class="about-vision-note">{SCOPE_VISION_NOTE}</p></div>',
+            unsafe_allow_html=True,
+        )
+    st.info(SCOPE_NOTICE)
+
+
 def _render_footer() -> None:
     st.markdown('<div class="about-footer">', unsafe_allow_html=True)
     brand_col, links_col, models_col, contact_col = st.columns(4)
@@ -191,13 +269,13 @@ def _render_footer() -> None:
             unsafe_allow_html=True,
         )
     with links_col:
-        st.markdown("<h3>Quick Links</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3>{FOOTER_LINKS_HEADING}</h3>", unsafe_allow_html=True)
         for step_key, label in FOOTER_QUICK_LINKS:
             if st.button(label, key=f"quick_link_{step_key}"):
                 _go_to_workflow(step_key)
     with models_col:
         st.markdown(
-            "<h3>Models and Data</h3>"
+            f"<h3>{FOOTER_MODELS_HEADING}</h3>"
             f"<p>Muse Voice Transcribe — {MODEL_STATUS['voice']}</p>"
             f"<p>Muse Spark review — {MODEL_STATUS['spark']}</p>"
             f"<p>Draft export and evaluation — {MODEL_STATUS['export']}</p>"
@@ -206,7 +284,8 @@ def _render_footer() -> None:
         )
     with contact_col:
         st.markdown(
-            f"<h3>Contact</h3><p>{FOOTER_CONTACT}</p>", unsafe_allow_html=True
+            f"<h3>{FOOTER_CONTACT_HEADING}</h3><p>{FOOTER_CONTACT}</p>",
+            unsafe_allow_html=True,
         )
     st.markdown(
         f'<p class="about-footer-bottom">{FOOTER_BOTTOM}</p></div>',
@@ -224,5 +303,6 @@ def render_about() -> None:
     _render_problem()
     _render_approach()
     _render_solution()
+    _render_scope()
     _render_footer()
     st.markdown("</div>", unsafe_allow_html=True)

@@ -233,6 +233,48 @@ div[data-testid="stButton"] > button { min-height: 44px; }
     padding-top: 1rem;
     margin-top: 1rem;
 }
+.about-affected-label {
+    text-align: center;
+    color: $primary_dark_green;
+    font-weight: 700;
+    margin: 1rem 0 0.5rem;
+}
+.about-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+.about-chip {
+    display: inline-block;
+    background-color: $accent_light;
+    color: $text_dark;
+    border: 1px solid $accent_gold_brown;
+    border-radius: 999px;
+    padding: 0.3rem 0.9rem;
+    font-weight: 600;
+}
+.about-scope-card {
+    background-color: $card_bg;
+    border: 1px solid $accent_light;
+    border-top: 3px solid $accent_gold_brown;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    height: 100%;
+}
+.about-beyond-item { margin-bottom: 0.5rem; color: $text_dark; }
+.about-notbuilt {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+    margin-left: 0.5rem;
+    background-color: $cream_bg;
+    color: $text_dark;
+    border: 1px dashed $accent_gold_brown;
+}
+.about-vision-note { color: $text_dark; font-style: italic; }
 @media (max-width: 768px) {
     .block-container { padding: 1rem 0.75rem; }
     div[data-testid="column"] { min-width: 100% !important; margin-bottom: 0.5rem; }
@@ -243,7 +285,7 @@ div[data-testid="stButton"] > button { min-height: 44px; }
     button[kind="primary"], button[kind="secondary"] { width: 100%; }
     .about-hero h1 { font-size: 1.9rem !important; }
     .about-approach-lead { flex-direction: column; align-items: flex-start; }
-    .about-problem-card, .about-solution-card { padding: 0.9rem; }
+    .about-problem-card, .about-solution-card, .about-scope-card { padding: 0.9rem; }
 }
 </style>
 """

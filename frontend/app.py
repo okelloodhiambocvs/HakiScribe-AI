@@ -6,6 +6,13 @@ Meta API calls and touches no database directly.
 
 import streamlit as st
 
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from backend.core.config import is_configured
 from backend.services.ingestion_service import validate_and_store_upload
 from backend.services.transcription_service import get_transcript, transcribe_recording

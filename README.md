@@ -2,40 +2,34 @@
 
 Human-in-the-loop court transcription for Kenyan courts. Built for the **Meta Global Hackathon**.
 
-> **RULE: AI proposes. HUMAN disposes.** No transcript is final until a Clerk verifies it and a Magistrate certifies it. No auto-certify, ever.
+> **RULE: AI proposes. HUMAN REVIEWS.** Nothing here is official. Every AI output is a draft.
 
 > **SYNTHETIC DATA ONLY.** Every case, name, script, and document in this repo is fictional (`R v. SYNTHETIC John Doe`, CR 123/2026). No real litigants, no real court audio. See [demo-data/synthetic/README.md](demo-data/synthetic/README.md).
 
-## What it does
+## The one workflow
 
-Noisy courtroom audio goes in; a certified, hash-sealed court record comes out — with a plain-language explainer for the citizen, a visual case timeline, and redacted public copies. Every AI output is a **draft** that a named human must review, edit, or approve before it counts.
+Upload → Transcribe → Review → Export. Priority 1 (upload + transcribe) is live; the review desk and draft export are next. Design: [ARCHITECTURE-V2.md](docs/architecture/ARCHITECTURE-V2.md), [SCOPE-V2.md](docs/SCOPE-V2.md).
 
-Pipeline ([ARCHITECTURE.md](ARCHITECTURE.md)):
+1. **Upload & validate** — synthetic audio (mp3, wav, m4a, aac, adts, ogg, opus, webm); type, size, and attestation checks; SHA-256 hashed and stored with a recording row.
+2. **Transcribe** — Muse Voice Transcribe via Meta Model API (clearly-marked mock fallback offline); segments keep timestamps, Kenyan speakers, confidence, and verbatim English/Kiswahili/code-switching.
+3. **Review desk (next)** — Spark flags, jump-to-audio, reviewer edits and per-segment decisions.
+4. **Draft export + evaluation (next)** — watermarked DOCX draft with WER/CER against the reviewer's corrections.
 
-1. **Transcribe** — court audio → speaker segments with timestamps + confidence.
-2. **Structure & flag** — speakers normalized, low-confidence segments flagged, appeal deadlines suggested.
-3. **Human loop** — Clerk reviews every flagged segment → Magistrate certifies (must be a different person) → SHA-256 sealed record + audit log.
-4. **Serve the citizen** — Kiswahili/English explainer, visual timeline, certified PDF, redacted public copies. All blocked until certification.
+## Meta models actually used
 
-## Meta models used
-
-| Model | Role | Module |
+| Model | Status | Role |
 |---|---|---|
-| Muse Voice Transcribe | en-KE/sw-KE transcription with diarization + word confidence | `src/transcription/client.py` |
-| Muse Spark | Structurer (speakers/case no.), Guardian (`[VERIFY]` flags < 0.75), Deadline (14/60-day appeal windows) | `src/agents/` |
-| Muse Wonder | Mwananchi explainer — certified outcomes in plain English + Kiswahili | `src/explainer/` |
-| SAM 3.1 | Charge-sheet segmentation; masks signature + ID number for public copies | `src/vision/` |
-| Muse Image | Visual case timeline infographic (hearing → review → certify → deadlines) | `src/timeline/` |
-| Muse Glimmer (open weights) | **Local, offline** PII redaction on the court laptop — no internet | `src/offline/` |
+| Muse Voice Transcribe | Live | Transcription with timestamps + confidence (`backend/integrations/meta/voice_transcribe.py`) |
+| Muse Spark or Muse Wonder | Next | Intelligent flagging of errors/inconsistencies (suggest only) |
 
-Every client follows the same pattern: real Meta Model API call when `META_API_KEY` is configured, clearly-marked synthetic mock fallback when offline — and `needs_human_review=True` on all AI output either way.
+Parked in [`extras/`](extras/README.md), not in the core workflow: Muse Image, SAM 3.1, Muse Glimmer offline.
 
-## Human-in-the-loop locks
+## Human-in-the-loop
 
-- Clerk reviews **per segment** (no bulk approve), name required for accountability.
-- Magistrate can certify only after Clerk completes, and must be a **different person**.
-- Explainer, timeline, and PDF export are **blocked until certified**; every approval is named and audit-logged.
-- Final record is SHA-256 hashed over `final_text + clerk + magistrate`.
+- Single Reviewer role; a name is required on every decision.
+- `text_original` is immutable — corrections are separate rows with reviewer, timestamp, before/after.
+- The export is always a watermarked DRAFT, never a certified record.
+- No certification, no deadlines, no legal advice anywhere in the system.
 
 ## Quickstart
 
@@ -44,38 +38,35 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 copy .env.example .env        # add your dev.meta.ai key, or leave blank for mock mode
-streamlit run app.py
+streamlit run frontend/app.py
 ```
 
 Demo flow (works fully offline in mock mode):
 
-1. Enter a Clerk name and a *different* Magistrate name.
-2. **Load Synthetic Demo CR 123/2026** → AI draft v1 (NOT certified).
-3. Clerk confirms/edits each flagged segment → **Clerk Complete Review**.
-4. **Magistrate CERTIFY** → sealed record + hash.
-5. Generate the Mwananchi explainer, visual timeline, certified PDF, and redactions — each needs human approval.
-
-Optional: record teammates reading [the 2-minute script](demo-data/synthetic/case-cr-123-2026-script.md) as `demo-data/synthetic/cr-123-mock.mp3`.
+1. Enter your reviewer name.
+2. Upload a synthetic hearing file and tick the attestation box.
+3. Transcribe (mock mode needs no key) and read the timestamped segments.
 
 ```bash
-pytest   # 32 tests, all passing
+pytest   # 16 tests, all passing
 ```
 
 ## Project structure
 
 ```
-app.py                    # Streamlit human-in-the-loop UI
-src/transcription/        # Muse Voice Transcribe client
-src/agents/               # Muse Spark: structurer, guardian, deadline
-src/verification/         # Clerk/Magistrate review service + audit log + hash
-src/explainer/            # Muse Wonder EN/SW explainer (post-certification)
-src/timeline/             # Muse Image visual timeline (post-certification)
-src/export/               # Certified PDF export (human only)
-src/vision/               # SAM 3.1 charge-sheet redaction drafts
-src/offline/              # Glimmer local offline PII redaction
-src/utils/config.py       # .env plumbing + key validation
-demo-data/synthetic/      # Fictional case script + charge sheet
-tests/                    # pytest suite incl. end-to-end certification flow
+frontend/app.py               # Streamlit Review Desk (Priority 1: upload + transcribe)
+backend/core/config.py        # .env loading + Meta model names + key validation
+backend/services/             # ingestion_service, transcription_service (review/export next)
+backend/repositories/         # recordings, segments, flags, corrections, exports (only DB access)
+backend/integrations/meta/    # voice_transcribe.py — the only Meta API call site
+database/                     # SQLite schema + connection (data/hakiscribe.db, gitignored)
+storage/uploads/  storage/exports/   # synthetic files only (gitignored)
+data/                         # local SQLite file lives here (gitignored)
+extras/                       # parked V1 client modules, reference only
+docs/architecture/ARCHITECTURE-V2.md # layer design + schema
+docs/SCOPE-V2.md              # submission scope + deferred list
+demo-data/synthetic/          # fictional case script + charge sheet
+tests/                        # test_database_v2, test_ingestion_v2, test_transcription_v2
 ```
 
 ## Configuration
@@ -84,13 +75,17 @@ tests/                    # pytest suite incl. end-to-end certification flow
 |---|---|
 | `META_API_KEY` | dev.meta.ai key; blank/placeholder = mock mode |
 | `META_API_BASE` | Model API base URL (default `https://dev.meta.ai/model-api/v1`) |
-| `META_VOICE_MODEL` / `META_REASONING_MODEL` | Voice Transcribe / Spark model names |
-| `META_WONDER_MODEL` / `META_SAM_MODEL` / `META_IMAGE_MODEL` / `META_OPEN_MODEL` | Wonder / SAM 3.1 / Image / Glimmer model names |
-| `GLIMMER_MODEL_PATH` | Local open-weights path; if set, Glimmer runs on-device |
+| `META_VOICE_MODEL` | Voice Transcribe model name (live) |
+| `META_REASONING_MODEL` / `META_WONDER_MODEL` | Spark / Wonder model names (flagging next) |
+| `META_SAM_MODEL` / `META_IMAGE_MODEL` / `META_OPEN_MODEL` / `GLIMMER_MODEL_PATH` | Parked-model settings (unused by V2 core) |
+
+## Deferred scope
+
+Deliberately not built for this submission ([SCOPE-V2.md](docs/SCOPE-V2.md)): certification and signatures, deadline prediction, legal advice, real-case data and Judiciary integrations, the Wonder public explainer, Image timelines, SAM redaction, and offline Glimmer.
 
 ## Build log
 
-- [HACKATHON-LOG.md](HACKATHON-LOG.md) — proof of new work, steps 1–8.
+- [HACKATHON-LOG.md](HACKATHON-LOG.md) — proof of new work, steps 1–14.
 - [MUSE-CODE-LOG.md](MUSE-CODE-LOG.md) — what was built with Muse Code.
 
 ## License

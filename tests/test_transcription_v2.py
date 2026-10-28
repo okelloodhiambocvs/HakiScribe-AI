@@ -5,6 +5,7 @@ data/hakiscribe.db and storage/uploads are never touched here.
 """
 
 import json
+import threading
 import wave
 
 import pytest
@@ -20,8 +21,15 @@ from backend.integrations.meta.voice_transcribe import (
     normalize_speaker,
     transcribe_audio_file,
 )
+from backend.repositories import corrections_repo, flags_repo
+from backend.repositories import recordings_repo, segments_repo
+from backend.repositories.segments_repo import TranscriptionLockedError
 from backend.services.ingestion_service import validate_and_store_upload
-from backend.services.transcription_service import transcribe_recording
+from backend.services.transcription_service import (
+    TranscriptionInProgressError,
+    retranscribe_recording,
+    transcribe_recording,
+)
 
 
 def _recording_id(tmp_path):
@@ -200,3 +208,171 @@ def test_mock_path_still_works():
     result = transcribe_audio_file("nonexistent-file.mp3", force_mock=True)
     assert result["status"] == "mock-no-key"
     assert len(result["segments"]) == 5
+
+
+def _fake_segments(prefix="Take"):
+    return [
+        {
+            "idx": i,
+            "start_sec": float(i),
+            "end_sec": float(i + 1),
+            "speaker": "MAGISTRATE",
+            "confidence": 0.9,
+            "language": "en-KE",
+            "text_original": f"{prefix} segment {i}.",
+        }
+        for i in range(3)
+    ]
+
+
+def test_second_transcribe_reports_already_transcribed_with_source(tmp_path):
+    db = tmp_path / "t.db"
+    recording_id = _recording_id(tmp_path)
+    first = transcribe_recording(recording_id, force_mock=True, db_path=db)
+    assert first["segment_count"] == 5
+    assert first["source"] == "mock"
+    second = transcribe_recording(recording_id, force_mock=True, db_path=db)
+    assert second["status"] == "already_transcribed"
+    assert second["segment_count"] == 5
+    assert second["source"] == "mock"
+    assert len(segments_repo.list_segments(recording_id, db_path=db)) == 5
+
+
+def test_legacy_transcript_without_source_reports_mock(tmp_path):
+    db = tmp_path / "t.db"
+    recording_id = _recording_id(tmp_path)
+    segments_repo.create_segments(recording_id, _fake_segments(), db_path=db)
+    result = transcribe_recording(recording_id, force_mock=True, db_path=db)
+    assert result["status"] == "already_transcribed"
+    assert result["source"] == "mock"
+
+
+def test_concurrent_transcribe_single_winner(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    recording_id = _recording_id(tmp_path)
+    entered = threading.Barrier(2)
+    release = threading.Event()
+    calls = []
+    payload = {
+        "model": "muse-voice-transcribe-mock",
+        "status": "mock-no-key",
+        "needs_human_review": True,
+        "segments": _fake_segments(),
+    }
+
+    def gated_meta_call(audio_path, force_mock=False):
+        calls.append(audio_path)
+        entered.wait(timeout=30)
+        assert release.wait(timeout=30)
+        return payload
+
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.transcribe_audio_file",
+        gated_meta_call,
+    )
+    errors = []
+
+    def worker():
+        try:
+            transcribe_recording(recording_id, force_mock=True, db_path=db)
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    entered.wait(timeout=30)
+    with pytest.raises(TranscriptionInProgressError):
+        transcribe_recording(recording_id, force_mock=True, db_path=db)
+    release.set()
+    thread.join(timeout=30)
+    assert not thread.is_alive()
+    assert errors == []
+    assert len(calls) == 1
+    assert len(segments_repo.list_segments(recording_id, db_path=db)) == 3
+
+
+def test_mock_transcription_stores_source_and_null_raw(tmp_path):
+    db = tmp_path / "t.db"
+    recording_id = _recording_id(tmp_path)
+    result = transcribe_recording(recording_id, force_mock=True, db_path=db)
+    assert result["source"] == "mock"
+    recording = recordings_repo.get_recording(recording_id, db_path=db)
+    assert recording["transcription_source"] == "mock"
+    assert recording["transcription_raw_json"] is None
+    assert recording["transcription_model"] == "muse-voice-transcribe-mock"
+    assert recording["transcribed_at"] is not None
+
+
+def test_real_transcription_stores_source_and_raw_json(tmp_path, monkeypatch):
+    wav_path = _make_wav(tmp_path / "real.wav")
+    recording = validate_and_store_upload(
+        "hearing.wav",
+        wav_path.read_bytes(),
+        "Reviewer Amina",
+        upload_dir=tmp_path / "uploads",
+        db_path=tmp_path / "t.db",
+    )
+    db = tmp_path / "t.db"
+    payload = {"segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "MAGISTRATE",
+         "confidence": 0.9, "text": "Hello."},
+    ]}
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse(200, payload)
+
+    _real_path(monkeypatch, fake_post)
+    result = transcribe_recording(recording["id"], force_mock=False, db_path=db)
+    assert result["status"] == "real"
+    assert result["source"] == "real"
+    assert result["segment_count"] == 1
+    stored = recordings_repo.get_recording(recording["id"], db_path=db)
+    assert stored["transcription_source"] == "real"
+    assert json.loads(stored["transcription_raw_json"]) == payload
+    assert stored["transcription_model"] == META_VOICE_MODEL
+    assert stored["transcribed_at"] is not None
+
+
+def test_retranscribe_replaces_until_locked(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    recording_id = _recording_id(tmp_path)
+    transcribe_recording(recording_id, force_mock=True, db_path=db)
+
+    take_two = {
+        "model": "muse-voice-transcribe-mock",
+        "status": "mock-no-key",
+        "needs_human_review": True,
+        "segments": _fake_segments(prefix="Take two"),
+    }
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.transcribe_audio_file",
+        lambda audio_path, force_mock=False: take_two,
+    )
+    replaced = retranscribe_recording(recording_id, force_mock=True, db_path=db)
+    assert replaced["status"] == "mock-no-key"
+    assert replaced["source"] == "mock"
+    assert replaced["segment_count"] == 3
+    assert [s["text_current"] for s in replaced["segments"]] == [
+        f"Take two segment {i}." for i in range(3)
+    ]
+
+    seg_id = replaced["segments"][0]["id"]
+    corrections_repo.create_correction(
+        seg_id, None, "Take two segment 0.", "Edited.", "Reviewer Amina",
+        "EDIT_TEXT", db_path=db,
+    )
+    with pytest.raises(TranscriptionLockedError):
+        retranscribe_recording(recording_id, force_mock=True, db_path=db)
+    assert len(segments_repo.list_segments(recording_id, db_path=db)) == 3
+
+    other_id = validate_and_store_upload(
+        "second.mp3", b"synthetic-audio", "Reviewer Amina",
+        upload_dir=tmp_path / "uploads", db_path=db,
+    )["id"]
+    transcribe_recording(other_id, force_mock=True, db_path=db)
+    other_seg = segments_repo.list_segments(other_id, db_path=db)[0]["id"]
+    flags_repo.create_flag(
+        other_seg, "LOW_CONFIDENCE", "HIGH", "Check.", db_path=db
+    )
+    with pytest.raises(TranscriptionLockedError):
+        retranscribe_recording(other_id, force_mock=True, db_path=db)

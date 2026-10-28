@@ -1,12 +1,16 @@
 """V2 SQLite schema: recordings, segments, flags, corrections, exports.
 
 Creation only — this module changes no data. `segments.text_original` is
-treated as immutable by convention; edits live in `corrections` rows.
+immutable by trigger; edits live in `corrections` rows. The schema is
+versioned with PRAGMA user_version; init_db migrates old files in place.
 """
 
+import threading
 from pathlib import Path
 
 from database.db import get_connection, get_db_path
+
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS recordings (
@@ -83,14 +87,107 @@ CREATE INDEX IF NOT EXISTS idx_corrections_segment_id ON corrections(segment_id)
 CREATE INDEX IF NOT EXISTS idx_exports_recording_id ON exports(recording_id);
 """
 
+# v1 -> v2: transcription provenance on recordings. Added with ALTER TABLE
+# so existing databases upgrade in place; fresh databases run the same
+# migration and converge on the identical schema.
+_RECORDINGS_V2_COLUMNS = (
+    ("transcription_source", "TEXT"),
+    ("transcription_model", "TEXT"),
+    ("transcription_raw_json", "TEXT"),
+    ("transcribed_at", "TEXT"),
+)
 
-def init_db(db_path: str | Path | None = None) -> Path:
-    """Create all V2 tables idempotently; return the database path used."""
-    path = get_db_path(db_path)
+TRIGGERS_SQL = """
+CREATE TRIGGER IF NOT EXISTS trg_segments_text_original_immutable
+BEFORE UPDATE ON segments
+WHEN OLD.text_original IS NOT NEW.text_original
+BEGIN
+    SELECT RAISE(ABORT, 'segments.text_original is immutable: update text_current instead');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_corrections_no_update
+BEFORE UPDATE ON corrections
+BEGIN
+    SELECT RAISE(ABORT, 'corrections are append-only: updates are blocked');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_recordings_transcription_locked
+BEFORE UPDATE ON recordings
+WHEN (OLD.transcription_source IS NOT NULL
+      AND NEW.transcription_source IS NOT OLD.transcription_source)
+  OR (OLD.transcription_raw_json IS NOT NULL
+      AND NEW.transcription_raw_json IS NOT OLD.transcription_raw_json)
+BEGIN
+    SELECT RAISE(ABORT, 'recordings transcription_source and transcription_raw_json are immutable once set');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_recordings_source_valid_insert
+BEFORE INSERT ON recordings
+WHEN NEW.transcription_source IS NOT NULL
+ AND NEW.transcription_source NOT IN ('real', 'mock')
+BEGIN
+    SELECT RAISE(ABORT, 'recordings.transcription_source must be ''real'' or ''mock''');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_recordings_source_valid_update
+BEFORE UPDATE ON recordings
+WHEN NEW.transcription_source IS NOT NULL
+ AND NEW.transcription_source NOT IN ('real', 'mock')
+BEGIN
+    SELECT RAISE(ABORT, 'recordings.transcription_source must be ''real'' or ''mock''');
+END;
+"""
+
+_INITIALIZED_PATHS: set[str] = set()
+_INIT_LOCK = threading.Lock()
+
+
+def _column_names(conn, table: str) -> set[str]:
+    """Return a table's column names via PRAGMA table_info."""
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _current_version(conn) -> int:
+    """Return the database PRAGMA user_version (0 when never stamped)."""
+    row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0]) if row else 0
+
+
+def _migrate_to_v2(conn) -> None:
+    """Add v2 columns (guarded), install triggers, stamp user_version."""
+    existing = _column_names(conn, "recordings")
+    for name, ddl in _RECORDINGS_V2_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE recordings ADD COLUMN {name} {ddl}")
+    conn.executescript(TRIGGERS_SQL)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _initialize_database(path: Path) -> None:
+    """Run the full init body once: base tables, then migrate to current."""
     conn = get_connection(path)
     try:
         conn.executescript(SCHEMA_SQL)
+        if _current_version(conn) < SCHEMA_VERSION:
+            _migrate_to_v2(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def init_db(db_path: str | Path | None = None) -> Path:
+    """Create/migrate all V2 tables idempotently; return the path used.
+
+    Skips work when this process already initialized the same resolved
+    path and the file still exists. Fresh tmp paths and deleted-and-
+    recreated files always re-run the body.
+    """
+    path = get_db_path(db_path)
+    key = str(path.resolve())
+    with _INIT_LOCK:
+        if key in _INITIALIZED_PATHS and path.exists():
+            return path
+    _initialize_database(path)
+    with _INIT_LOCK:
+        _INITIALIZED_PATHS.add(key)
     return path

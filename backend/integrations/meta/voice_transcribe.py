@@ -161,6 +161,38 @@ def _scrub_key(text: str) -> str:
     return text
 
 
+def html_title(body: str) -> str | None:
+    """Return the <title> text of an HTML body, else None."""
+    match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    text = re.sub(r"\s+", " ", match.group(1)).strip()
+    return text[:200] if text else None
+
+
+def is_html_body(body: str, content_type: str = "") -> bool:
+    """True when a response body looks like an HTML page, not an API payload."""
+    if "html" in (content_type or "").lower():
+        return True
+    lowered = (body or "").lstrip().lower()
+    return lowered.startswith("<!doctype html") or lowered.startswith("<html")
+
+
+def _format_http_error(response: requests.Response) -> str:
+    """Short key-free message; HTML bodies collapse to title + base hint."""
+    status = response.status_code
+    headers = getattr(response, "headers", None) or {}
+    content_type = headers.get("Content-Type", "") or ""
+    body = response.text or ""
+    if is_html_body(body, content_type):
+        title = html_title(body) or "(no title found)"
+        return (
+            f"transcription request failed: HTTP {status}: {title} "
+            "(HTML page, not an API response: check META_API_BASE)"
+        )
+    return f"transcription request failed: HTTP {status}: {_scrub_key(body[:500])}"
+
+
 def _post_with_retry(url: str, headers: dict, files: dict) -> requests.Response:
     last_response = None
     for attempt in range(MAX_RETRIES + 1):
@@ -210,10 +242,7 @@ def transcribe_audio_file(audio_path: str | Path, force_mock: bool = False) -> d
         response = _post_with_retry(url, headers, files)
 
     if response.status_code >= 400:
-        body = _scrub_key(response.text[:500])
-        raise TranscriptionError(
-            f"transcription request failed: HTTP {response.status_code}: {body}"
-        )
+        raise TranscriptionError(_format_http_error(response))
     try:
         payload = response.json()
     except ValueError as exc:

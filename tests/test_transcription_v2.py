@@ -4,9 +4,11 @@ Isolated tmp_path uploads folder and SQLite file per test. The real
 data/hakiscribe.db and storage/uploads are never touched here.
 """
 
+import importlib.util
 import json
 import threading
 import wave
+from pathlib import Path
 
 import pytest
 
@@ -376,3 +378,106 @@ def test_retranscribe_replaces_until_locked(tmp_path, monkeypatch):
     )
     with pytest.raises(TranscriptionLockedError):
         retranscribe_recording(other_id, force_mock=True, db_path=db)
+
+
+_HTML_500_BODY = (
+    "<html><head><title>Bad Gateway</title></head>"
+    "<body><h1>502 Bad Gateway</h1><p>upstream exploded</p></body></html>"
+)
+
+
+@pytest.mark.parametrize("headers", [{"Content-Type": "text/html"}, {}])
+def test_html_500_error_shows_title_only(tmp_path, monkeypatch, headers):
+    def fake_post(url, **kwargs):
+        return _FakeResponse(500, headers=dict(headers), body=_HTML_500_BODY)
+
+    _real_path(monkeypatch, fake_post)
+    src = _make_wav(tmp_path / "in.wav")
+    with pytest.raises(TranscriptionError) as exc_info:
+        transcribe_audio_file(src, force_mock=False)
+    message = str(exc_info.value)
+    assert "Bad Gateway" in message
+    assert "check META_API_BASE" in message
+    assert "<html" not in message
+    assert "<title>" not in message
+    assert len(message) < 200
+
+
+def test_json_400_error_still_includes_json_text(tmp_path, monkeypatch):
+    payload = {"error": {"message": "bad audio encoding"}}
+    body = json.dumps(payload)
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse(
+            400, headers={"Content-Type": "application/json"}, body=body
+        )
+
+    _real_path(monkeypatch, fake_post)
+    src = _make_wav(tmp_path / "in.wav")
+    with pytest.raises(TranscriptionError) as exc_info:
+        transcribe_audio_file(src, force_mock=False)
+    message = str(exc_info.value)
+    assert "bad audio encoding" in message
+    assert "400" in message
+
+
+def test_error_message_never_contains_api_key(tmp_path, monkeypatch):
+    fake_key = "test-fake-key-xyz-123"
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.config.get_meta_key",
+        lambda: fake_key,
+    )
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse(400, body=f"rejected key {fake_key} for this call")
+
+    _real_path(monkeypatch, fake_post)
+    src = _make_wav(tmp_path / "in.wav")
+    with pytest.raises(TranscriptionError) as exc_info:
+        transcribe_audio_file(src, force_mock=False)
+    message = str(exc_info.value)
+    assert fake_key not in message
+    assert "[REDACTED]" in message
+
+
+class _ProbeHtmlResponse:
+    def __init__(self):
+        self.status_code = 500
+        self.headers = {"Content-Type": "text/html", "x-request-id": "req-1"}
+        self.text = _HTML_500_BODY
+        self.ok = False
+
+    def json(self):
+        raise ValueError("no JSON here")
+
+
+def _load_probe_module():
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "probe_voice_api", root / "scripts" / "probe_voice_api.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_probe_html_output_has_no_raw_tags(tmp_path, monkeypatch, capsys):
+    probe = _load_probe_module()
+    fake_key = "test-fake-key-xyz-123"
+    monkeypatch.setattr(probe, "get_meta_key", lambda: fake_key)
+    monkeypatch.setattr(probe, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        probe.requests, "post", lambda url, **kwargs: _ProbeHtmlResponse()
+    )
+    src = _make_wav(tmp_path / "in.wav")
+    assert probe.main(["probe_voice_api.py", str(src)]) == 1
+    out = capsys.readouterr().out
+    assert "request URL:" in out
+    assert "/asr/transcribe" in out
+    assert "HTTP status: 500" in out
+    assert "Content-Type: text/html" in out
+    assert "x-request-id: req-1" in out
+    assert "Bad Gateway" in out
+    assert "check META_API_BASE" in out
+    assert "<html" not in out
+    assert fake_key not in out

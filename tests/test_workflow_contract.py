@@ -98,8 +98,8 @@ def test_contract_upload_snapshot_transcribe_snapshot(isolated_storage):
     assert done.transcript_status == "present"
     assert done.can_review is True
     assert done.can_export is True
-    assert "MAGISTRATE" in done.speakers
-    assert done.low_confidence_count == 1
+    assert "Speaker A" in done.speakers
+    assert done.low_confidence_count == 0
     with pytest.raises(dataclasses.FrozenInstanceError):
         done.can_review = False
 

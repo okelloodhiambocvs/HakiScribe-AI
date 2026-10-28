@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.repositories import (
+    api_calls_repo,
     corrections_repo,
     flags_repo,
     recordings_repo,
@@ -105,6 +106,13 @@ def retranscribe(
     return transcription_service.retranscribe_recording(
         recording_id, force_mock=force_mock, db_path=db_path
     )
+
+
+def list_recent_api_calls(
+    limit: int = 10, db_path: str | Path | None = None
+) -> list[dict]:
+    """Return the most recent Meta API attempt rows (newest first)."""
+    return api_calls_repo.list_recent_api_calls(limit=limit, db_path=db_path)
 
 
 def get_snapshot(

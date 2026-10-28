@@ -48,6 +48,33 @@ def _render_system_check() -> None:
             st.write(f"{dot} {check.name}: {check.message}")
 
 
+def _render_api_activity() -> None:
+    """Render the collapsed sidebar API log expander; never raises."""
+    with st.sidebar.expander("API activity", expanded=False):
+        try:
+            calls = workflow_service.list_recent_api_calls(10)
+        except Exception as exc:
+            show_error(exc)
+            return
+        if not calls:
+            st.write("No API calls yet.")
+            return
+        for call in calls:
+            mark = "🟢" if call["ok"] else "🔴"
+            if call["http_status"] is not None:
+                status = call["http_status"]
+            else:
+                status = call["error_code"] or "?"
+            if call["latency_ms"] is not None:
+                latency = f"{call['latency_ms']:.0f} ms"
+            else:
+                latency = "n/a"
+            st.write(
+                f"{mark} {call['created_at']} · {call['model']} · "
+                f"{call['mode']} · {status} · {latency}"
+            )
+
+
 st.set_page_config(page_title="HakiScribe-AI Review Desk", layout="wide")
 apply_theme()
 
@@ -67,6 +94,7 @@ st.sidebar.markdown(
     "4. Draft Export (next)"
 )
 _render_system_check()
+_render_api_activity()
 st.sidebar.divider()
 if st.sidebar.button("About Us", key="about_us_button"):
     st.session_state[state.SHOW_ABOUT] = True

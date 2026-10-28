@@ -27,6 +27,7 @@ def _clear_upload_state() -> None:
         state.HEARING_UPLOAD,
         state.UPLOAD_NOTICE,
         state.STALE_NOTICE,
+        state.TRANSCRIPT_WARNING,
     ):
         st.session_state.pop(key, None)
     st.session_state[state.CURRENT_STEP] = "upload"
@@ -60,6 +61,7 @@ def render(reviewer: str, snapshot: WorkflowSnapshot | None) -> None:
                     show_error(exc)
                 else:
                     st.session_state[state.RECORDING_ID] = recording["id"]
+                    st.session_state.pop(state.TRANSCRIPT_WARNING, None)
                     st.session_state[state.UPLOAD_NOTICE] = {
                         "filename": recording["filename"],
                         "size_bytes": recording["size_bytes"],
@@ -97,6 +99,7 @@ def render(reviewer: str, snapshot: WorkflowSnapshot | None) -> None:
                 show_error(exc)
             else:
                 st.session_state[state.RECORDING_ID] = recording["id"]
+                st.session_state.pop(state.TRANSCRIPT_WARNING, None)
                 st.session_state[state.UPLOAD_NOTICE] = {
                     "filename": recording["filename"],
                     "size_bytes": recording["size_bytes"],

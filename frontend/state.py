@@ -18,6 +18,7 @@ SHOW_ABOUT = "show_about"
 SNAPSHOT = "snapshot"
 MOCK_MODE = "mock_mode"
 STALE_NOTICE = "stale_notice"
+TRANSCRIPT_WARNING = "transcript_warning"
 
 
 def init_state() -> None:

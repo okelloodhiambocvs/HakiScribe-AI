@@ -54,7 +54,9 @@ def test_mock_transcription_persists_segments_with_timestamps(tmp_path):
     first = result["segments"][0]
     assert first["start_sec"] == 0.4
     assert first["end_sec"] == 4.2
-    assert first["speaker"] == "MAGISTRATE"
+    assert first["speaker"] == "Speaker A"
+    assert first["speaker_label"] == "A"
+    assert first["confidence"] is None
     for segment in result["segments"]:
         assert segment["text_original"]
         assert segment["text_current"] == segment["text_original"]
@@ -64,7 +66,8 @@ def test_mixed_language_is_preserved(tmp_path):
     db = tmp_path / "t.db"
     result = transcribe_recording(_recording_id(tmp_path), force_mock=True, db_path=db)
     complainant = next(
-        s for s in result["segments"] if s["speaker"] == "COMPLAINANT"
+        s for s in result["segments"]
+        if s["text_original"].startswith("Mheshimiwa, nilifika")
     )
     assert complainant["text_original"] == (
         "Mheshimiwa, nilifika nyumbani saa mbili, and then I saw the accused."
@@ -142,13 +145,22 @@ def test_prepare_wav_rejects_over_length_audio(tmp_path):
 def test_real_path_posts_asr_multipart(tmp_path, monkeypatch):
     src = _make_wav(tmp_path / "in.wav")
     calls = {}
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.config.META_LANGUAGE_BIAS",
+        "",
+    )
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.config.get_keywords",
+        lambda path=None: [],
+    )
 
     def fake_post(url, **kwargs):
         calls["url"] = url
         calls["kwargs"] = kwargs
-        return _FakeResponse(200, {"segments": [
-            {"start": 0.0, "end": 1.0, "speaker": "MAGISTRATE",
-             "confidence": 0.9, "text": "Hello."},
+        return _FakeResponse(200, {"sessionId": "s1", "transcript": "Hello.",
+                                   "audioDurationMs": 1000, "turns": [
+            {"turnId": 0, "startMs": 0, "endMs": 1000,
+             "transcript": "Hello.", "speaker": "A"},
         ]})
 
     _real_path(monkeypatch, fake_post)
@@ -159,7 +171,7 @@ def test_real_path_posts_asr_multipart(tmp_path, monkeypatch):
     files = calls["kwargs"]["files"]
     assert files["request"][2] == "application/json"
     assert json.loads(files["request"][1]) == {
-        "mode": "PUSH_TO_TALK",
+        "mode": "DIARIZATION",
         "model": META_VOICE_MODEL,
         "audioEncoding": "WAV",
     }
@@ -176,8 +188,9 @@ def test_429_is_retried_with_backoff(tmp_path, monkeypatch):
     responses = [
         _FakeResponse(429, headers={"Retry-After": "2"}, body="slow down"),
         _FakeResponse(429, body="slow down"),
-        _FakeResponse(200, {"segments": [
-            {"start": 0.0, "end": 1.0, "text": "Hi."},
+        _FakeResponse(200, {"turns": [
+            {"turnId": 0, "startMs": 0, "endMs": 1000,
+             "transcript": "Hi.", "speaker": "A"},
         ]}),
     ]
 
@@ -262,7 +275,7 @@ def test_concurrent_transcribe_single_winner(tmp_path, monkeypatch):
         "segments": _fake_segments(),
     }
 
-    def gated_meta_call(audio_path, force_mock=False):
+    def gated_meta_call(audio_path, force_mock=False, on_attempt=None):
         calls.append(audio_path)
         entered.wait(timeout=30)
         assert release.wait(timeout=30)
@@ -315,9 +328,10 @@ def test_real_transcription_stores_source_and_raw_json(tmp_path, monkeypatch):
         db_path=tmp_path / "t.db",
     )
     db = tmp_path / "t.db"
-    payload = {"segments": [
-        {"start": 0.0, "end": 1.0, "speaker": "MAGISTRATE",
-         "confidence": 0.9, "text": "Hello."},
+    payload = {"sessionId": "s1", "transcript": "Hello.",
+               "audioDurationMs": 1000, "turns": [
+        {"turnId": 0, "startMs": 0, "endMs": 1000,
+         "transcript": "Hello.", "speaker": "A"},
     ]}
 
     def fake_post(url, **kwargs):
@@ -348,7 +362,7 @@ def test_retranscribe_replaces_until_locked(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(
         "backend.integrations.meta.voice_transcribe.transcribe_audio_file",
-        lambda audio_path, force_mock=False: take_two,
+        lambda audio_path, force_mock=False, on_attempt=None: take_two,
     )
     replaced = retranscribe_recording(recording_id, force_mock=True, db_path=db)
     assert replaced["status"] == "mock-no-key"

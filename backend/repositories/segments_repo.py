@@ -34,15 +34,16 @@ def _insert_segment_row(conn, recording_id: int, seg: dict) -> int:
         raise ValueError(f"segment missing required keys: {missing}")
     cur = conn.execute(
         """INSERT INTO segments
-           (recording_id, idx, start_sec, end_sec, speaker, confidence,
-            language, text_original, text_current)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (recording_id, idx, start_sec, end_sec, speaker, speaker_label,
+            confidence, language, text_original, text_current)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             recording_id,
             seg["idx"],
             seg["start_sec"],
             seg["end_sec"],
             seg.get("speaker") or "UNKNOWN",
+            seg.get("speaker_label"),
             seg.get("confidence"),
             seg.get("language") or "mixed",
             seg["text_original"],
@@ -67,6 +68,7 @@ def create_segment(
     confidence: float | None,
     text_original: str,
     language: str = "mixed",
+    speaker_label: str | None = None,
     db_path: str | Path | None = None,
 ) -> int:
     """Insert one segment; text_current starts equal to text_original."""
@@ -75,15 +77,16 @@ def create_segment(
     try:
         cur = conn.execute(
             """INSERT INTO segments
-               (recording_id, idx, start_sec, end_sec, speaker, confidence,
-                language, text_original, text_current)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (recording_id, idx, start_sec, end_sec, speaker, speaker_label,
+                confidence, language, text_original, text_current)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 recording_id,
                 idx,
                 start_sec,
                 end_sec,
                 speaker,
+                speaker_label,
                 confidence,
                 language,
                 text_original,

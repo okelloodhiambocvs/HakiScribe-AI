@@ -9,13 +9,14 @@ import json
 import threading
 from pathlib import Path
 
+from backend.core import config
 from backend.core.errors import HakiScribeError
 from backend.integrations.meta import voice_transcribe
 from backend.integrations.meta.audio_prep import AudioPrepError  # noqa: F401 (re-export)
 from backend.integrations.meta.voice_transcribe import (  # noqa: F401 (re-export)
     TranscriptionError,
 )
-from backend.repositories import segments_repo
+from backend.repositories import api_calls_repo, segments_repo
 from backend.repositories.segments_repo import (  # noqa: F401 (re-export)
     AlreadyTranscribedError,
     TranscriptionLockedError,
@@ -63,6 +64,28 @@ def _source_of(recording: dict) -> str:
     return recording.get("transcription_source") or "mock"
 
 
+def _attempt_recorder(recording_id: int, db_path: str | Path | None):
+    """Build the integration's per-attempt callback (persists via repo)."""
+    def record(info: dict) -> None:
+        api_calls_repo.create_api_call(
+            provider="meta",
+            model=config.META_VOICE_MODEL,
+            endpoint_path=voice_transcribe.ENDPOINT_PATH,
+            mode=config.get_voice_mode(),
+            recording_id=recording_id,
+            http_status=info.get("http_status"),
+            ok=bool(info.get("ok")),
+            latency_ms=info.get("latency_ms"),
+            audio_bytes=info.get("audio_bytes"),
+            audio_ms=info.get("audio_ms"),
+            request_id=info.get("request_id"),
+            error_code=info.get("error_code"),
+            db_path=db_path,
+        )
+
+    return record
+
+
 def _already_transcribed_result(
     recording_id: int, recording: dict, db_path: str | Path | None
 ) -> dict:
@@ -74,6 +97,7 @@ def _already_transcribed_result(
         "segment_count": len(existing),
         "segments": existing,
         "source": _source_of(recording),
+        "warning": None,
     }
 
 
@@ -140,7 +164,9 @@ def transcribe_recording(
             raise ValueError(f"stored audio file missing: {stored_path}")
         # Slow network call: outside any transaction by construction.
         result = voice_transcribe.transcribe_audio_file(
-            stored_path, force_mock=force_mock
+            stored_path,
+            force_mock=force_mock,
+            on_attempt=_attempt_recorder(recording_id, db_path),
         )
         try:
             saved, source = _persist_result(
@@ -156,6 +182,7 @@ def transcribe_recording(
             "segment_count": len(saved),
             "segments": saved,
             "source": source,
+            "warning": result.get("warning"),
         }
     finally:
         with _transcribe_lock:
@@ -175,7 +202,11 @@ def retranscribe_recording(
     stored_path = recording["stored_path"]
     if not Path(stored_path).is_file():
         raise ValueError(f"stored audio file missing: {stored_path}")
-    result = voice_transcribe.transcribe_audio_file(stored_path, force_mock=force_mock)
+    result = voice_transcribe.transcribe_audio_file(
+        stored_path,
+        force_mock=force_mock,
+        on_attempt=_attempt_recorder(recording_id, db_path),
+    )
     saved, source = _persist_result(recording_id, result, db_path, replace=True)
     return {
         "recording_id": recording_id,
@@ -183,6 +214,7 @@ def retranscribe_recording(
         "segment_count": len(saved),
         "segments": saved,
         "source": source,
+        "warning": result.get("warning"),
     }
 
 

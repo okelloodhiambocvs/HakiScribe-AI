@@ -11,7 +11,7 @@ Human-in-the-loop court transcription for Kenyan courts. Built for the **Meta Gl
 Upload → Transcribe → Review → Export. Priority 1 (upload + transcribe) is live; the review desk and draft export are next. Design: [ARCHITECTURE-V2.md](docs/architecture/ARCHITECTURE-V2.md), [SCOPE-V2.md](docs/SCOPE-V2.md).
 
 1. **Upload & validate** — synthetic audio (mp3, wav, m4a, aac, adts, ogg, opus, webm); type, size, and attestation checks; SHA-256 hashed and stored with a recording row.
-2. **Transcribe** — Muse Voice Transcribe via Meta Model API (clearly-marked mock fallback offline); segments keep timestamps, Kenyan speakers, confidence, and verbatim English/Kiswahili/code-switching.
+2. **Transcribe** — Muse Voice Transcribe via Meta Model API (clearly-marked mock fallback offline); segments keep timestamps, speaker turns (Speaker A/B), and verbatim English/Kiswahili/code-switching. The API returns no confidence scores.
 3. **Review desk (next)** — Spark flags, jump-to-audio, reviewer edits and per-segment decisions.
 4. **Draft export + evaluation (next)** — watermarked DOCX draft with WER/CER against the reviewer's corrections.
 
@@ -19,7 +19,7 @@ Upload → Transcribe → Review → Export. Priority 1 (upload + transcribe) is
 
 | Area | Status | Notes |
 |---|---|---|
-| Muse Voice Transcribe | Live | Timestamps + confidence (`backend/integrations/meta/voice_transcribe.py`) |
+| Muse Voice Transcribe | Live | DIARIZATION turns + timestamps, no confidence from API (`backend/integrations/meta/voice_transcribe.py`) |
 | Muse Spark review flags | Planned | Later step; the review desk shows an honest preview today |
 | Corrections history | Planned | Repository ready; reviewer save flow is a later step |
 | DOCX draft export | Planned | Later step; no generator yet |
@@ -57,7 +57,7 @@ One-click demo: enter your reviewer name and press **Load demo recording**
 3. Transcribe (mock mode needs no key) and read the timestamped segments.
 
 ```bash
-pytest   # 73 tests, all passing
+pytest   # 113 tests, all passing
 ```
 
 ## Project structure
@@ -86,6 +86,9 @@ tests/                        # test_database_v2, test_ingestion_v2, test_transc
 | `META_API_KEY` | dev.meta.ai key; blank/placeholder = mock mode |
 | `META_API_BASE` | Model API base URL (default `https://api.meta.ai/v1`) |
 | `META_VOICE_MODEL` | Voice Transcribe model name (live) |
+| `META_VOICE_MODE` | `DIARIZATION` (default), `PUSH_TO_TALK`, or `ENDPOINTING` |
+| `META_LANGUAGE_BIAS` | Comma list, e.g. `English,Kiswahili`; empty = not sent |
+| `backend/core/keywords.txt` | One court term per line (max 50 x 40 chars); sent as `keywords` |
 | `META_REASONING_MODEL` / `META_WONDER_MODEL` | Spark / Wonder model names (flagging next) |
 | `META_SAM_MODEL` / `META_IMAGE_MODEL` / `META_OPEN_MODEL` / `GLIMMER_MODEL_PATH` | Parked-model settings (unused by V2 core) |
 | `HAKISCRIBE_DB_PATH` | Override for the SQLite file (default `data/hakiscribe.db`) |

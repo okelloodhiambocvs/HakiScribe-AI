@@ -10,7 +10,7 @@ from pathlib import Path
 
 from database.db import get_connection, get_db_path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS recordings (
@@ -154,13 +154,46 @@ def _current_version(conn) -> int:
 
 
 def _migrate_to_v2(conn) -> None:
-    """Add v2 columns (guarded), install triggers, stamp user_version."""
+    """Add v2 columns (guarded), install triggers, stamp user_version 2."""
     existing = _column_names(conn, "recordings")
     for name, ddl in _RECORDINGS_V2_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE recordings ADD COLUMN {name} {ddl}")
     conn.executescript(TRIGGERS_SQL)
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.execute("PRAGMA user_version = 2")
+
+
+# v2 -> v3: raw diarization letter on segments plus the Meta API attempt
+# log. api_calls stores outcomes only — never keys or request/response
+# bodies. Recording deletes keep the log (recording_id SET NULL).
+_API_CALLS_SQL = """
+CREATE TABLE IF NOT EXISTS api_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    endpoint_path TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    recording_id INTEGER REFERENCES recordings(id) ON DELETE SET NULL,
+    http_status INTEGER,
+    ok INTEGER NOT NULL DEFAULT 0,
+    latency_ms REAL,
+    audio_bytes INTEGER,
+    audio_ms INTEGER,
+    request_id TEXT,
+    error_code TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_calls_recording_id ON api_calls(recording_id);
+"""
+
+
+def _migrate_to_v3(conn) -> None:
+    """Add segments.speaker_label + api_calls log; stamp user_version 3."""
+    if "speaker_label" not in _column_names(conn, "segments"):
+        conn.execute("ALTER TABLE segments ADD COLUMN speaker_label TEXT")
+    conn.executescript(_API_CALLS_SQL)
+    conn.execute("PRAGMA user_version = 3")
 
 
 def _initialize_database(path: Path) -> None:
@@ -168,8 +201,11 @@ def _initialize_database(path: Path) -> None:
     conn = get_connection(path)
     try:
         conn.executescript(SCHEMA_SQL)
-        if _current_version(conn) < SCHEMA_VERSION:
+        version = _current_version(conn)
+        if version < 2:
             _migrate_to_v2(conn)
+        if version < 3:
+            _migrate_to_v3(conn)
         conn.commit()
     finally:
         conn.close()

@@ -60,6 +60,7 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
             except Exception as exc:
                 show_error(exc)
             else:
+                st.session_state[state.TRANSCRIPT_WARNING] = result.get("warning")
                 if result.get("status") == "already_transcribed":
                     st.info("Already transcribed — showing saved segments.")
                 else:
@@ -78,6 +79,9 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
                 st.success("Real: Muse Voice Transcribe")
             else:
                 st.info("MOCK: demo only")
+        warning = st.session_state.get(state.TRANSCRIPT_WARNING)
+        if warning:
+            st.warning(warning)
 
         segments = list(snapshot.segments)
         if segments:
@@ -86,11 +90,11 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
                 "are not yet written to the correction history."
             )
             active_filter = st.session_state.get(state.SPEAKER_FILTER, "ALL")
-            filter_cols = st.columns(7)
-            for column, speaker in zip(
-                filter_cols,
-                ["ALL", "MAGISTRATE", "PROSECUTOR", "ADVOCATE", "ACCUSED", "COMPLAINANT", "WITNESS_PW1"],
-            ):
+            speaker_options = ["ALL"] + [
+                speaker for speaker in snapshot.speakers if speaker != "ALL"
+            ]
+            filter_cols = st.columns(len(speaker_options))
+            for column, speaker in zip(filter_cols, speaker_options):
                 if column.button(
                     speaker,
                     type="primary" if speaker == active_filter else "secondary",
@@ -98,10 +102,13 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
                 ):
                     st.session_state[state.SPEAKER_FILTER] = speaker
                     st.rerun()
-            st.session_state[state.SHOW_LOW_CONFIDENCE_ONLY] = st.checkbox(
-                "Show low confidence only (<0.75)",
-                value=st.session_state.get(state.SHOW_LOW_CONFIDENCE_ONLY, False),
-            )
+            if any(s.get("confidence") is not None for s in segments):
+                st.session_state[state.SHOW_LOW_CONFIDENCE_ONLY] = st.checkbox(
+                    "Show low confidence only (<0.75)",
+                    value=st.session_state.get(state.SHOW_LOW_CONFIDENCE_ONLY, False),
+                )
+            else:
+                st.session_state[state.SHOW_LOW_CONFIDENCE_ONLY] = False
             st.session_state[state.TRANSCRIPT_SEARCH] = st.text_input(
                 "Search transcript",
                 value=st.session_state.get(state.TRANSCRIPT_SEARCH, ""),

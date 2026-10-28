@@ -17,3 +17,4 @@ Old exploration repo for transparency: https://github.com/okelloodhiambocvs/Haki
 - [x] Step 12: Created V2 frontend/backend/database skeleton with config shim, old src kept working, 32 tests passed
 - [x] Step 13: Added SQLite schema and repositories for recordings, segments, flags, corrections and exports, 38 tests passed
 - [x] Step 14: Added validated upload, Muse Voice Transcribe integration with mock fallback, persisted transcript, and V2 upload/transcribe frontend
+- [x] Step 15: Added dark green and golden light brown brand theme, interactive stepper, upload card, transcript filters/cards and responsive polish

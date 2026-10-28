@@ -121,6 +121,8 @@ if nav_export.button("Draft & Evaluation"):
     st.session_state["current_step"] = "export"
     st.rerun()
 
+st.divider()
+
 step = st.session_state["current_step"]
 
 notice = st.session_state.get("upload_notice")
@@ -199,6 +201,7 @@ if step in ("upload", "transcribe"):
 
 recording = st.session_state["recording"]
 if recording is not None and step in ("upload", "transcribe"):
+    st.divider()
     st.header("Recording")
     meta_left, meta_right = st.columns(2)
     meta_left.write(f"File: {recording['filename']}")
@@ -324,7 +327,84 @@ elif step == "transcribe":
 if step == "review":
     st.header("3. Review Desk")
     st.info("Interactive preview - backend workflow connects in the next backend step.")
+    review_recording = st.session_state.get("recording")
+    review_segments = (
+        get_transcript(review_recording["id"]) if review_recording else []
+    )
+    if not review_recording or not review_segments:
+        st.info("No transcript in this session yet. Upload and transcribe first.")
+        if st.button("Go to Upload"):
+            st.session_state["current_step"] = "upload"
+            st.rerun()
+    else:
+        st.subheader("Session summary")
+        low_confidence = [
+            segment
+            for segment in review_segments
+            if segment["confidence"] is not None
+            and float(segment["confidence"]) < CONFIDENCE_THRESHOLD
+        ]
+        unknown_speaker = [
+            segment
+            for segment in review_segments
+            if (segment["speaker"] or "UNKNOWN") == "UNKNOWN"
+        ]
+        draft_count = len(st.session_state.get("draft_edits", {}))
+        metric_total, metric_low, metric_speakers, metric_drafts = st.columns(4)
+        metric_total.metric("Total segments", len(review_segments))
+        metric_low.metric("Low confidence segments", len(low_confidence))
+        metric_speakers.metric(
+            "Speakers detected",
+            len({segment["speaker"] for segment in review_segments}),
+        )
+        metric_drafts.metric("Draft edits (local count)", draft_count)
+        st.divider()
+        st.subheader("Flag preview")
+        st.caption("Preview only — backend flag workflow connects in the next backend step.")
+        flagged = {}
+        for segment in review_segments:
+            reasons = []
+            if (segment["speaker"] or "UNKNOWN") == "UNKNOWN":
+                reasons.append("UNKNOWN speaker")
+            if segment["confidence"] is not None and float(segment["confidence"]) < CONFIDENCE_THRESHOLD:
+                reasons.append(f"low confidence {float(segment['confidence']):.0%}")
+            if reasons:
+                flagged[segment["id"]] = (segment, reasons)
+        if not flagged:
+            st.info("No flags in this preview — every segment looks clean.")
+        for seg_id in sorted(flagged, key=lambda i: flagged[i][0]["idx"]):
+            segment, reasons = flagged[seg_id]
+            text = f"Segment {segment['idx']} ({segment['speaker']}): " + "; ".join(reasons)
+            if (segment["speaker"] or "UNKNOWN") == "UNKNOWN":
+                st.error(text)
+            else:
+                st.warning(text)
+            if st.button("Select", key=f"flag_select_{seg_id}"):
+                st.session_state["selected_segment_idx"] = segment["idx"]
+                st.session_state["current_step"] = "transcribe"
+                st.rerun()
+        st.divider()
+        st.subheader("Actions")
+        if st.button("Save Correction to History (Backend Next)", type="secondary"):
+            st.info("Correction history saving is the next backend step. Draft edits stay local for now.")
 
 if step == "export":
     st.header("4. Draft & Evaluation")
     st.info("Interactive preview - backend workflow connects in the next backend step.")
+    st.markdown(
+        '<div class="draft-watermark">'
+        "DRAFT - NOT AN OFFICIAL COURT RECORD - HUMAN REVIEWED"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.subheader("Original vs Reviewed (preview)")
+    eval_wer, eval_cer, eval_changed, eval_flags = st.columns(4)
+    eval_wer.metric("Word Error Rate", "—")
+    eval_cer.metric("Character Error Rate", "—")
+    eval_changed.metric("Segments changed", "—")
+    eval_flags.metric("Flags resolved", "—")
+    st.caption("Preview placeholders — real scores connect with the backend evaluation step.")
+    st.divider()
+    st.subheader("Actions")
+    if st.button("Generate DOCX Draft (Backend Next)", type="secondary"):
+        st.info("DOCX generation connects in the backend step. No file is generated in this preview.")

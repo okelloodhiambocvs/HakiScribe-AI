@@ -8,6 +8,7 @@ with pure-Python linear interpolation (no new dependencies).
 import abc
 import asyncio
 import struct
+import time
 import wave
 from pathlib import Path
 
@@ -38,7 +39,10 @@ class AudioSource(abc.ABC):
 
 
 class SoundDeviceSource(AudioSource):
-    """Microphone capture at 24 kHz mono int16 via sounddevice."""
+    """Microphone capture at 24 kHz mono int16 via sounddevice.
+
+    A full queue drops the oldest frame so the stream stays current.
+    """
 
     def __init__(self, device=None, samplerate=SAMPLE_RATE,
                  blocksize=BLOCK_FRAMES):
@@ -99,7 +103,17 @@ class SoundDeviceSource(AudioSource):
             try:
                 self._queue.put_nowait(data)
             except asyncio.QueueFull:
-                pass
+                # Drop the oldest frame so the stream stays current.
+                # Only non-blocking calls: the audio callback must
+                # never wait, and the queue stays bounded.
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    self._queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    pass
 
         try:
             loop.call_soon_threadsafe(_deliver)
@@ -169,6 +183,8 @@ class FileSource(AudioSource):
     Any PCM WAV (8/16-bit, mono/stereo, any rate) converts to 24 kHz
     mono int16 and yields 3840-byte blocks in real time unless
     realtime=False. A short final block is zero-padded to full size.
+    Pacing follows an absolute monotonic schedule so send overhead
+    never accumulates into drift.
     """
 
     def __init__(self, path: str | Path, realtime: bool = True):
@@ -186,14 +202,25 @@ class FileSource(AudioSource):
 
     async def frames(self):
         pcm = self._load_wire_pcm()
-        for offset in range(0, len(pcm), BLOCK_BYTES):
+        started = time.monotonic()
+        for index, offset in enumerate(range(0, len(pcm), BLOCK_BYTES)):
             if self._stopped:
                 return
             block = pcm[offset : offset + BLOCK_BYTES]
             if len(block) < BLOCK_BYTES:
                 block += b"\x00" * (BLOCK_BYTES - len(block))
             if self.realtime:
-                await asyncio.sleep(BLOCK_SECONDS)
+                # Absolute schedule: frame n is due at started +
+                # (n+1) frame durations, so read/send overhead never
+                # accumulates into drift. Late frames go out at once;
+                # the delay is never negative.
+                delay = (
+                    started
+                    + (index + 1) * BLOCK_SECONDS
+                    - time.monotonic()
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
             if self._stopped:
                 return
             yield block

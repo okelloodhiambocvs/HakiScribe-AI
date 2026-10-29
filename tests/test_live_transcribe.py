@@ -491,6 +491,190 @@ def test_file_source_missing_file(tmp_path):
         source.start()
 
 
+async def _collect_frames(source):
+    """Collect every frame from a source (test helper)."""
+    return [chunk async for chunk in source.frames()]
+
+
+def _drain_queue(queue):
+    """Remove every queued item without blocking (test helper)."""
+    items = []
+    while True:
+        try:
+            items.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            return items
+
+
+def test_file_source_blocks_keep_order_and_bytes(tmp_path):
+    wav_path = tmp_path / "order.wav"
+    _write_wav(wav_path, seconds=0.5, rate=16000)
+    loader = FileSource(wav_path, realtime=False)
+    loader.start()
+    pcm = loader._load_wire_pcm()
+    expected = []
+    for offset in range(0, len(pcm), BLOCK_BYTES):
+        block = pcm[offset : offset + BLOCK_BYTES]
+        if len(block) < BLOCK_BYTES:
+            block += b"\x00" * (BLOCK_BYTES - len(block))
+        expected.append(block)
+    source = FileSource(wav_path, realtime=False)
+    source.start()
+    assert _run(_collect_frames(source)) == expected
+
+
+def test_file_source_absolute_schedule_absorbs_overhead(tmp_path, monkeypatch):
+    """Overhead shortens sleeps; it never accumulates into playback drift."""
+    wav_path = tmp_path / "drift.wav"
+    _write_wav(wav_path, seconds=0.4)  # 9600 samples -> 5 blocks
+    now = [1000.0]
+    delays = []
+
+    async def fake_sleep(delay):
+        assert delay >= 0
+        delays.append(delay)
+        now[0] += delay
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    source = FileSource(wav_path, realtime=True)
+    source.start()
+
+    async def collect():
+        blocks = []
+        async for chunk in source.frames():
+            blocks.append(chunk)
+            now[0] += 0.005  # simulated send overhead per frame
+        return blocks
+
+    blocks = _run(collect())
+    assert len(blocks) == 5
+    assert delays == pytest.approx([0.08, 0.075, 0.075, 0.075, 0.075])
+    assert sum(delays) == pytest.approx(0.38)
+    # Fixed 80 ms sleeps would end at 0.425; the absolute schedule
+    # absorbs the 25 ms overhead and stays on the 0.40 grid.
+    assert now[0] - 1000.0 == pytest.approx(0.405)
+    plain = FileSource(wav_path, realtime=False)
+    plain.start()
+    assert blocks == _run(_collect_frames(plain))
+
+
+def test_file_source_late_frame_skips_sleep_without_going_negative(
+    tmp_path, monkeypatch
+):
+    wav_path = tmp_path / "late.wav"
+    _write_wav(wav_path, seconds=0.24)  # 5760 samples -> 3 blocks
+    now = [2000.0]
+    delays = []
+
+    async def fake_sleep(delay):
+        assert delay >= 0
+        delays.append(delay)
+        now[0] += delay
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    source = FileSource(wav_path, realtime=True)
+    source.start()
+
+    async def collect():
+        stream = source.frames()
+        first = await stream.__anext__()
+        now[0] += 1.0  # stall: every remaining frame is past due
+        rest = [chunk async for chunk in stream]
+        return [first, *rest]
+
+    blocks = _run(collect())
+    assert len(blocks) == 3
+    assert delays == pytest.approx([0.08])  # late frames slept nothing
+    plain = FileSource(wav_path, realtime=False)
+    plain.start()
+    assert blocks == _run(_collect_frames(plain))
+
+
+def test_file_source_stop_ends_iteration(tmp_path, monkeypatch):
+    wav_path = tmp_path / "cancel.wav"
+    _write_wav(wav_path, seconds=0.4)  # 5 blocks
+    now = [3000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    async def fake_sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    source = FileSource(wav_path, realtime=True)
+    source.start()
+
+    async def collect_two_then_stop():
+        seen = []
+        async for chunk in source.frames():
+            seen.append(chunk)
+            if len(seen) == 2:
+                source.stop()
+        return seen
+
+    assert len(_run(collect_two_then_stop())) == 2
+    stopped = FileSource(wav_path, realtime=False)
+    stopped.start()
+    stopped.stop()
+    assert _run(_collect_frames(stopped)) == []
+
+
+def test_sounddevice_callback_inserts_frame():
+    source = SoundDeviceSource(device=0)
+    frame = b"\x01\x02" * (BLOCK_BYTES // 2)
+
+    async def go():
+        source._loop = asyncio.get_running_loop()
+        source._callback(frame, 0, None, None)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return _drain_queue(source._queue)
+
+    assert _run(go()) == [frame]
+
+
+def test_sounddevice_full_queue_drops_oldest_keeps_newest():
+    source = SoundDeviceSource(device=0)
+    newest = b"\xab\xcd" * (BLOCK_BYTES // 2)
+
+    async def go():
+        source._loop = asyncio.get_running_loop()
+        for index in range(source._queue.maxsize):
+            source._queue.put_nowait(bytes([index % 256]) * BLOCK_BYTES)
+        source._callback(newest, 0, None, None)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return _drain_queue(source._queue)
+
+    kept = _run(go())
+    assert len(kept) == source._queue.maxsize
+    assert kept[-1] == newest
+    assert kept[0] == bytes([1]) * BLOCK_BYTES
+    assert bytes([0]) * BLOCK_BYTES not in kept
+
+
+def test_sounddevice_callback_never_blocks_on_full_queue():
+    """Sustained overflow returns at once and the queue stays bounded."""
+    source = SoundDeviceSource(device=0)
+
+    async def go():
+        source._loop = asyncio.get_running_loop()
+        for _ in range(source._queue.maxsize):
+            source._queue.put_nowait(b"\x00" * BLOCK_BYTES)
+        for burst in range(300):
+            source._callback(
+                bytes([burst % 256]) * BLOCK_BYTES, 0, None, None
+            )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return _drain_queue(source._queue)
+
+    kept = _run(go())
+    assert len(kept) == source._queue.maxsize
+    assert kept[-1] == bytes([299 % 256]) * BLOCK_BYTES
+
+
 def test_migrate_v6_to_v7_keeps_data(tmp_path):
     db_path = tmp_path / "v6.db"
     conn = get_connection(db_path)

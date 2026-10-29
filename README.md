@@ -25,7 +25,7 @@ exactly as spoken, and never translates, paraphrases, or adds words.
 | AI review flags (Spark) | Live | `tests/test_spark_review.py` |
 | Human review and traceable corrections | Live | `tests/test_human_review.py` |
 | Watermarked DOCX draft and WER/CER | Live | `tests/test_draft_export.py` |
-| Kenyan-language measurement | Live | `tests/test_language_evaluation.py`, `scripts/evaluate_asr.py` |
+| Kenyan-language measurement | Pipeline live, nothing measured yet (0 clips, 0 runs) | `tests/test_language_evaluation.py`, `scripts/evaluate_asr.py` |
 | Deletion and API evidence | Live | `tests/test_submission_readiness.py`, `scripts/generate_api_evidence.py` |
 | Case request tracking | Planned | `docs/SCOPE-V2.md` |
 | Authorised document access | Planned | `docs/SCOPE-V2.md` |
@@ -67,7 +67,7 @@ only integrations call Meta. Details:
 
 - **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) — batch DIARIZATION and realtime capture.
 - **Muse Spark** (`muse-spark-1.1`) — review flags; never modifies the transcript.
-- Real Meta calls are proven in [API-EVIDENCE.md](docs/API-EVIDENCE.md), generated from the local call log.
+- Provider attempts recorded in the API-call ledger appear in [API-EVIDENCE.md](docs/API-EVIDENCE.md), generated from the local call log. No provider calls are recorded yet, and calls made by probe or evaluation scripts are not currently ledgered.
 
 ## Setup in five commands
 

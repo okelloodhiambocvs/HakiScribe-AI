@@ -1,6 +1,7 @@
 """Demo data + docs honesty tests: script, wav, loader, README claims."""
 
 import hashlib
+import json
 import re
 import struct
 import wave
@@ -51,6 +52,38 @@ def _require_demo_wav() -> Path:
     if not demo.is_file():
         pytest.skip("demo wav not generated yet (run scripts/make_demo_audio.ps1)")
     return demo
+
+
+def _require_reference() -> Path:
+    ref = ROOT / "demo-data" / "synthetic" / "case-cr-123-2026.reference.json"
+    if not ref.is_file():
+        pytest.skip("demo reference not generated yet (run scripts/make_demo_audio.ps1)")
+    return ref
+
+
+def test_reference_json_valid_and_consistent_with_wav():
+    demo = _require_demo_wav()
+    ref_path = _require_reference()
+    reference = json.loads(ref_path.read_text(encoding="utf-8-sig"))
+    turns = reference["turns"]
+    assert len(turns) >= 5
+    allowed = _allowed_speakers()
+    previous_end = 0
+    for position, turn in enumerate(turns):
+        assert turn["turn_idx"] == position
+        assert turn["role"] in allowed
+        assert turn["voice"]
+        assert turn["start_ms"] < turn["end_ms"]
+        assert turn["start_ms"] >= previous_end
+        assert turn["text"].strip()
+        previous_end = turn["end_ms"]
+    assert (
+        hashlib.sha256(demo.read_bytes()).hexdigest()
+        == reference["audio_sha256"]
+    )
+    with wave.open(str(demo), "rb") as wav_file:
+        duration = wav_file.getnframes() / wav_file.getframerate()
+    assert abs(turns[-1]["end_ms"] / 1000 - duration) < 1.0
 
 
 def test_script_uses_only_allowed_speaker_labels():
@@ -106,9 +139,9 @@ def test_load_demo_recording_missing_file_friendly_error(tmp_path, monkeypatch):
         )
 
 
-def test_readme_makes_no_active_spark_or_docx_claims():
+def test_readme_live_claims_are_backed():
     text = README_PATH.read_text(encoding="utf-8")
     assert "Planned" in text
     lowered = text.lower()
-    assert not re.search(r"spark[^.\n]{0,60}\b(live|active)\b", lowered)
-    assert not re.search(r"docx[^.\n]{0,60}\b(live|active)\b", lowered)
+    assert re.search(r"spark[^.\n]{0,60}\blive\b", lowered)
+    assert re.search(r"docx[^.\n]{0,60}\blive\b", lowered)

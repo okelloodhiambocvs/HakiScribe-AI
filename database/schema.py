@@ -10,7 +10,7 @@ from pathlib import Path
 
 from database.db import get_connection, get_db_path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 8
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS recordings (
@@ -196,6 +196,153 @@ def _migrate_to_v3(conn) -> None:
     conn.execute("PRAGMA user_version = 3")
 
 
+# v3 -> v4: review metadata on flags plus the ai_runs ledger. related
+# segment ids reference segments(id); recording deletes cascade the runs.
+_FLAGS_V4_COLUMNS = (
+    ("suggestion", "TEXT"),
+    ("related_segment_id", "INTEGER"),
+    ("prompt_version", "TEXT"),
+    ("evidence_verified", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+_AI_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS ai_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('real', 'mock')),
+    status TEXT NOT NULL DEFAULT 'complete',
+    flags_created INTEGER NOT NULL DEFAULT 0,
+    flags_dropped INTEGER NOT NULL DEFAULT 0,
+    raw_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_runs_recording_id ON ai_runs(recording_id);
+"""
+
+
+def _migrate_to_v4(conn) -> None:
+    """Add flags review columns + ai_runs ledger; stamp user_version 4."""
+    existing = _column_names(conn, "flags")
+    for name, ddl in _FLAGS_V4_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE flags ADD COLUMN {name} {ddl}")
+    conn.executescript(_AI_RUNS_SQL)
+    conn.execute("PRAGMA user_version = 4")
+
+
+# v4 -> v5: human-review traceability. corrections.field marks text vs
+# speaker_role edits; speaker_roles holds one role per speaker label;
+# review_events logs review-time activity. Recording deletes cascade.
+_SPEAKER_ROLES_SQL = """
+CREATE TABLE IF NOT EXISTS speaker_roles (
+    recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    speaker_label TEXT NOT NULL,
+    role TEXT NOT NULL,
+    assigned_by TEXT NOT NULL,
+    assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(recording_id, speaker_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_speaker_roles_recording_id
+    ON speaker_roles(recording_id);
+"""
+
+_REVIEW_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS review_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    reviewer TEXT NOT NULL,
+    event TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_events_recording_id
+    ON review_events(recording_id);
+"""
+
+
+def _migrate_to_v5(conn) -> None:
+    """Add corrections.field + speaker_roles + review_events; stamp v5."""
+    if "field" not in _column_names(conn, "corrections"):
+        conn.execute(
+            "ALTER TABLE corrections ADD COLUMN field TEXT NOT NULL DEFAULT 'text'"
+        )
+    conn.executescript(_SPEAKER_ROLES_SQL)
+    conn.executescript(_REVIEW_EVENTS_SQL)
+    conn.execute("PRAGMA user_version = 5")
+
+
+# v5 -> v6: evaluation snapshot columns on exports. All nullable: metrics
+# that cannot be computed stay NULL instead of placeholder numbers.
+_EXPORTS_V6_COLUMNS = (
+    ("ref_wer", "REAL"),
+    ("ref_cer", "REAL"),
+    ("speaker_attribution_pct", "REAL"),
+    ("boundary_error_ms", "REAL"),
+    ("traceability_pct", "REAL"),
+    ("review_seconds", "REAL"),
+)
+
+
+def _migrate_to_v6(conn) -> None:
+    """Add exports evaluation columns; stamp user_version 6."""
+    existing = _column_names(conn, "exports")
+    for name, ddl in _EXPORTS_V6_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE exports ADD COLUMN {name} {ddl}")
+    conn.execute("PRAGMA user_version = 6")
+
+
+# v6 -> v7: live microphone capture. capture_source marks rows recorded
+# live; segments.is_approximate marks live timestamps from our audio
+# clock, replaced by batch timestamps on finalise.
+_RECORDINGS_V7_COLUMNS = (
+    ("capture_source", "TEXT NOT NULL DEFAULT 'upload'"),
+)
+
+_SEGMENTS_V7_COLUMNS = (
+    ("is_approximate", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _migrate_to_v7(conn) -> None:
+    """Add live-capture columns; stamp user_version 7."""
+    existing = _column_names(conn, "recordings")
+    for name, ddl in _RECORDINGS_V7_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE recordings ADD COLUMN {name} {ddl}")
+    existing = _column_names(conn, "segments")
+    for name, ddl in _SEGMENTS_V7_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE segments ADD COLUMN {name} {ddl}")
+    conn.execute("PRAGMA user_version = 7")
+
+
+# v7 -> v8: deletion audit. deletion_log keeps content-free events
+# (deleted recording id, reviewer, time) after rows and files are
+# removed. No foreign key: the recording row is gone by design.
+_DELETION_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS deletion_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL,
+    reviewer TEXT NOT NULL,
+    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletion_log_recording_id
+    ON deletion_log(recording_id);
+"""
+
+
+def _migrate_to_v8(conn) -> None:
+    """Add the deletion_log audit table; stamp user_version 8."""
+    conn.executescript(_DELETION_LOG_SQL)
+    conn.execute("PRAGMA user_version = 8")
+
+
 def _initialize_database(path: Path) -> None:
     """Run the full init body once: base tables, then migrate to current."""
     conn = get_connection(path)
@@ -206,6 +353,16 @@ def _initialize_database(path: Path) -> None:
             _migrate_to_v2(conn)
         if version < 3:
             _migrate_to_v3(conn)
+        if version < 4:
+            _migrate_to_v4(conn)
+        if version < 5:
+            _migrate_to_v5(conn)
+        if version < 6:
+            _migrate_to_v6(conn)
+        if version < 7:
+            _migrate_to_v7(conn)
+        if version < 8:
+            _migrate_to_v8(conn)
         conn.commit()
     finally:
         conn.close()

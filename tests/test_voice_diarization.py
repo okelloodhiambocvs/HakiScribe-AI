@@ -372,14 +372,23 @@ def _make_v2_database(db):
     return rec_id
 
 
-def test_migration_v2_to_v3_keeps_data(tmp_path):
+def test_migration_v2_to_latest_keeps_data(tmp_path):
     db = tmp_path / "v2.db"
     rec_id = _make_v2_database(db)
     init_db(db)
     conn = get_connection(db)
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == SCHEMA_VERSION == 3
+        assert version == SCHEMA_VERSION
+        flag_cols = {row[1] for row in conn.execute("PRAGMA table_info(flags)")}
+        assert {
+            "suggestion",
+            "related_segment_id",
+            "prompt_version",
+            "evidence_verified",
+        } <= flag_cols
+        (runs,) = conn.execute("SELECT COUNT(*) FROM ai_runs").fetchone()
+        assert runs == 0
         rec = conn.execute(
             "SELECT * FROM recordings WHERE id = ?", (rec_id,)
         ).fetchone()

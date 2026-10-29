@@ -8,6 +8,7 @@ for Quick Links) and nothing else.
 import streamlit as st
 
 from frontend import state
+from frontend.components.language_notes import render_language_notes
 from frontend.components.stepper import can_access_snapshot
 
 HERO_TITLE = "Karibu HakiScribe"
@@ -232,6 +233,11 @@ def _render_solution() -> None:
         )
 
 
+def _render_language_notes() -> None:
+    """Measured accuracy notes (shared panel component)."""
+    render_language_notes()
+
+
 def _render_scope() -> None:
     st.markdown(
         f'<div class="about-section"><h2 class="about-center">{SCOPE_HEADING}</h2></div>',
@@ -302,6 +308,7 @@ def render_about() -> None:
     _render_problem()
     _render_approach()
     _render_solution()
+    _render_language_notes()
     _render_scope()
     _render_footer()
     st.markdown("</div>", unsafe_allow_html=True)

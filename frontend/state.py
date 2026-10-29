@@ -19,6 +19,8 @@ SNAPSHOT = "snapshot"
 MOCK_MODE = "mock_mode"
 STALE_NOTICE = "stale_notice"
 TRANSCRIPT_WARNING = "transcript_warning"
+REVIEW_OPEN_EVENTS = "review_open_events"
+EXPORT_NOTICE = "export_notice"
 
 
 def init_state() -> None:

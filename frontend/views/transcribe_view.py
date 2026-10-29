@@ -7,6 +7,7 @@ from backend.services import workflow_service
 from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
 from frontend.components.errors import show_error
+from frontend.components.language_notes import render_language_notes
 from frontend.components.transcript_card import (
     LOW_CONFIDENCE_THRESHOLD,
     render_segment_card,
@@ -24,6 +25,8 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
     """Render the recording panel and transcript (upload/transcribe steps)."""
     step = st.session_state[state.CURRENT_STEP]
     recording = snapshot.recording if snapshot is not None else None
+    if step == "transcribe":
+        render_language_notes()
     if recording is not None and step in ("upload", "transcribe"):
         st.divider()
         st.header("Recording")
@@ -36,6 +39,34 @@ def render(snapshot: WorkflowSnapshot | None) -> None:
             st.audio(recording["stored_path"])
         except Exception:
             st.info("Audio preview is unavailable for this recording.")
+
+        with st.expander("Delete recording and files", expanded=False):
+            st.write(
+                "Removes the recording row, transcript, flags, corrections, "
+                "exports, the stored audio, and the export files. A "
+                "content-free deletion entry (id, time, reviewer) is kept."
+            )
+            confirm_text = st.text_input(
+                "Type DELETE to confirm",
+                value="",
+                key=f"delete_confirm_{recording['id']}",
+            )
+            if st.button("Delete permanently", key=f"delete_{recording['id']}"):
+                deleter = (st.session_state.get("reviewer_name") or "").strip()
+                if not deleter:
+                    st.warning("Enter your reviewer name in the sidebar first.")
+                else:
+                    try:
+                        workflow_service.delete_recording(
+                            recording["id"], deleter, confirm_text
+                        )
+                    except Exception as exc:
+                        show_error(exc)
+                    else:
+                        # Keep the id so the app's stale-state flow resets
+                        # to Upload with a friendly notice on rerun.
+                        st.session_state[state.CURRENT_STEP] = "upload"
+                        st.rerun()
 
         st.header("2. Transcribe")
         default_mock = st.session_state.get(state.MOCK_MODE)

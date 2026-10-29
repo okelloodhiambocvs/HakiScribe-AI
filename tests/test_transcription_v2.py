@@ -375,7 +375,7 @@ def test_retranscribe_replaces_until_locked(tmp_path, monkeypatch):
     seg_id = replaced["segments"][0]["id"]
     corrections_repo.create_correction(
         seg_id, None, "Take two segment 0.", "Edited.", "Reviewer Amina",
-        "EDIT_TEXT", db_path=db,
+        "EDIT_TEXT", reason="Decided in test.", db_path=db,
     )
     with pytest.raises(TranscriptionLockedError):
         retranscribe_recording(recording_id, force_mock=True, db_path=db)

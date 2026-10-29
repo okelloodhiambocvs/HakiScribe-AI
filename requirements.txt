@@ -4,3 +4,5 @@ requests>=2.31
 pytest>=8.0
 python-docx>=1.1
 imageio-ffmpeg>=0.4
+websockets>=13
+sounddevice>=0.4

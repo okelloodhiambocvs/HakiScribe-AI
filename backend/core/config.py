@@ -12,7 +12,8 @@ META_API_BASE = os.getenv("META_API_BASE", "https://api.meta.ai/v1")
 META_VOICE_MODEL = os.getenv("META_VOICE_MODEL", "muse-voice-transcribe-1.0")
 META_VOICE_MODE = os.getenv("META_VOICE_MODE", "DIARIZATION")
 META_LANGUAGE_BIAS = os.getenv("META_LANGUAGE_BIAS", "")
-META_REASONING_MODEL = os.getenv("META_REASONING_MODEL", "muse-spark")
+META_REASONING_MODEL = os.getenv("META_REASONING_MODEL", "muse-spark-1.1")
+META_SPARK_API_STYLE = os.getenv("META_SPARK_API_STYLE", "chat")
 META_WONDER_MODEL = os.getenv("META_WONDER_MODEL", "muse-wonder")
 META_SAM_MODEL = os.getenv("META_SAM_MODEL", "sam-3.1")
 META_IMAGE_MODEL = os.getenv("META_IMAGE_MODEL", "muse-image")
@@ -100,6 +101,7 @@ __all__ = [
     "get_language_bias",
     "get_keywords",
     "META_REASONING_MODEL",
+    "META_SPARK_API_STYLE",
     "META_WONDER_MODEL",
     "META_SAM_MODEL",
     "META_IMAGE_MODEL",

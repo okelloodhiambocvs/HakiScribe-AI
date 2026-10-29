@@ -7,6 +7,7 @@ Layer rules enforced on every project .py file:
 - Only database/ and backend/repositories/ may import database
   (tests/ are exempt: they verify the layers directly).
 - Only backend/integrations/, extras/ and scripts/ may import requests.
+- Only backend/integrations/ (and tests/) may import websockets/sounddevice.
 - No module may import the deleted src package.
 - frontend/ may import backend only from backend.services and backend.core.
 - frontend/views/ must import workflow_service, not other service modules.
@@ -166,13 +167,26 @@ def test_app_entry_stays_small():
     assert line_count < 200
 
 
+def test_realtime_deps_only_in_integrations():
+    offenders = []
+    for rel, modules in _scan().items():
+        if rel.startswith("backend/integrations/") or rel.startswith("tests/"):
+            continue
+        for mod in sorted(modules):
+            if mod.split(".")[0] in {"websockets", "sounddevice"}:
+                offenders.append(f"{rel} imports {mod}")
+    assert offenders == []
+
+
 def test_app_loads_without_exception():
     app = AppTest.from_file(str(APP_PATH))
     app.run()
     assert not app.exception
 
 
-@pytest.mark.parametrize("step", ["upload", "transcribe", "review", "export"])
+@pytest.mark.parametrize(
+    "step", ["upload", "transcribe", "review", "export", "live"]
+)
 def test_view_empty_state_renders(step):
     app = AppTest.from_file(str(APP_PATH))
     app.session_state["current_step"] = step

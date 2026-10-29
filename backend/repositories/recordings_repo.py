@@ -16,17 +16,20 @@ def create_recording(
     duration_sec: float | None,
     uploaded_by: str,
     synthetic_attestation: bool = True,
+    capture_source: str = "upload",
     db_path: str | Path | None = None,
 ) -> int:
     """Insert a recording row; return its id."""
+    if capture_source not in ("upload", "live"):
+        raise ValueError(f"invalid capture source: {capture_source!r}")
     init_db(db_path)
     conn = get_connection(db_path)
     try:
         cur = conn.execute(
             """INSERT INTO recordings
                (filename, stored_path, sha256, size_bytes, duration_sec,
-                uploaded_by, synthetic_attestation)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                uploaded_by, synthetic_attestation, capture_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 filename,
                 stored_path,
@@ -35,6 +38,7 @@ def create_recording(
                 duration_sec,
                 uploaded_by,
                 int(synthetic_attestation),
+                capture_source,
             ),
         )
         conn.commit()
@@ -130,5 +134,24 @@ def check_database(db_path: str | Path | None = None) -> dict:
             "user_version": None,
             "error": str(exc),
         }
+    finally:
+        conn.close()
+
+
+def delete_recording(
+    recording_id: int, db_path: str | Path | None = None
+) -> bool:
+    """Delete one recording row; children cascade, api_calls unlinks.
+
+    Returns True when a row was deleted, False when the id was missing.
+    """
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.execute(
+            "DELETE FROM recordings WHERE id = ?", (recording_id,)
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()

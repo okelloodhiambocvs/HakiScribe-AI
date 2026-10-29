@@ -184,7 +184,7 @@ def test_corrections_updates_blocked_but_cascade_delete_works(tmp_path):
     )
     corrections_repo.create_correction(
         seg_id, flag_id, "Sikuwa hapo.", "Si kweli, sikuwa hapo.",
-        "Reviewer Amina", "EDIT_TEXT", db_path=db,
+        "Reviewer Amina", "EDIT_TEXT", reason="Confirmed wording.", db_path=db,
     )
     conn = get_connection(db)
     try:

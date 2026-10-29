@@ -10,7 +10,11 @@ import uuid
 from pathlib import Path
 
 from backend.core.errors import UploadValidationError
-from backend.repositories import recordings_repo
+from backend.repositories import (
+    deletion_log_repo,
+    exports_repo,
+    recordings_repo,
+)
 
 ALLOWED_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".adts", ".ogg", ".opus", ".webm")
 DEMO_RECORDING_PATH = Path("demo-data/synthetic/case-cr-123-2026.wav")
@@ -111,3 +115,52 @@ def get_recording_or_raise(
             f"recording not found: {recording_id}"
         )
     return recording
+
+
+DELETE_CONFIRMATION = "DELETE"
+
+
+def delete_recording(
+    recording_id: int,
+    reviewer: str,
+    confirm: str,
+    export_dir: str | Path = "storage/exports",
+    db_path: str | Path | None = None,
+) -> dict:
+    """Delete a recording's rows, audio file, and export files.
+
+    Requires confirm == "DELETE" and a non-empty reviewer. Writes a
+    content-free deletion_log row (deleted id, reviewer, time). Files
+    that are already gone are skipped; failures are reported, not raised.
+    """
+    reviewer = (reviewer or "").strip()
+    if not reviewer:
+        raise ValueError("reviewer name is required")
+    if confirm != DELETE_CONFIRMATION:
+        raise ValueError("type DELETE to confirm deletion")
+    recording = get_recording_or_raise(recording_id, db_path=db_path)
+    exports = exports_repo.list_exports_by_recording(
+        recording_id, db_path=db_path
+    )
+    candidates = [recording["stored_path"]]
+    export_root = Path(export_dir)
+    for export in exports:
+        name = export.get("docx_filename") or ""
+        if not name or Path(name).name != name:
+            continue
+        candidates.append(str(export_root / name))
+    removed, failed = 0, []
+    for candidate in candidates:
+        try:
+            if Path(candidate).is_file():
+                Path(candidate).unlink()
+                removed += 1
+        except OSError:
+            failed.append(Path(candidate).name)
+    recordings_repo.delete_recording(recording_id, db_path=db_path)
+    deletion_log_repo.log_deletion(recording_id, reviewer, db_path=db_path)
+    return {
+        "recording_id": recording_id,
+        "files_removed": removed,
+        "files_failed": failed,
+    }

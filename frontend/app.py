@@ -17,10 +17,11 @@ if str(_REPO_ROOT) not in sys.path:
 from backend.services import workflow_service
 from frontend import state
 from frontend.components.about_page import render_about
+from frontend.components.api_evidence import render_api_evidence
 from frontend.components.errors import show_error
 from frontend.components.stepper import can_access_snapshot, render_stepper
 from frontend.theme import apply_theme
-from frontend.views import export_view, review_view, transcribe_view, upload_view
+from frontend.views import export_view, live_view, review_view, transcribe_view, upload_view
 
 _STATUS_DOT = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}
 
@@ -95,6 +96,10 @@ st.sidebar.markdown(
 )
 _render_system_check()
 _render_api_activity()
+render_api_evidence()
+if st.sidebar.button("Live microphone", key="nav_live_microphone"):
+    st.session_state[state.CURRENT_STEP] = "live"
+    st.rerun()
 st.sidebar.divider()
 if st.sidebar.button("About Us", key="about_us_button"):
     st.session_state[state.SHOW_ABOUT] = True
@@ -123,40 +128,41 @@ if st.session_state.get(state.RECORDING_ID) is not None and snapshot is None:
 if st.session_state.pop(state.STALE_NOTICE, False):
     st.info("Previous recording is no longer available. Starting a fresh upload.")
 
-render_stepper(st.session_state[state.CURRENT_STEP])
+if st.session_state[state.CURRENT_STEP] != "live":
+    render_stepper(st.session_state[state.CURRENT_STEP])
 
-has_recording = snapshot is not None
-has_transcript = bool(snapshot and snapshot.transcript_status == "present")
+    has_recording = snapshot is not None
+    has_transcript = bool(snapshot and snapshot.transcript_status == "present")
 
-if has_transcript and st.session_state[state.CURRENT_STEP] == "export":
-    workflow_progress, workflow_step_num = 1.0, 4
-elif has_transcript:
-    workflow_progress, workflow_step_num = 0.75, 3
-elif has_recording:
-    workflow_progress, workflow_step_num = 0.50, 2
-else:
-    workflow_progress, workflow_step_num = 0.25, 1
-st.write(f"Workflow progress: Step {workflow_step_num} of 4")
-st.progress(workflow_progress)
-st.caption("Workflow position only — not transcription accuracy.")
+    if has_transcript and st.session_state[state.CURRENT_STEP] == "export":
+        workflow_progress, workflow_step_num = 1.0, 4
+    elif has_transcript:
+        workflow_progress, workflow_step_num = 0.75, 3
+    elif has_recording:
+        workflow_progress, workflow_step_num = 0.50, 2
+    else:
+        workflow_progress, workflow_step_num = 0.25, 1
+    st.write(f"Workflow progress: Step {workflow_step_num} of 4")
+    st.progress(workflow_progress)
+    st.caption("Workflow position only — not transcription accuracy.")
 
-nav_targets = [
-    ("upload", "Upload"),
-    ("transcribe", "Transcribe"),
-    ("review", "Review Desk"),
-    ("export", "Draft & Evaluation"),
-]
-nav_columns = st.columns(4)
-for nav_column, (target_step, nav_label) in zip(nav_columns, nav_targets):
-    if nav_column.button(nav_label):
-        allowed, reason = can_access_snapshot(target_step, snapshot)
-        if allowed:
-            st.session_state[state.CURRENT_STEP] = target_step
-            st.rerun()
-        else:
-            st.warning(reason)
+    nav_targets = [
+        ("upload", "Upload"),
+        ("transcribe", "Transcribe"),
+        ("review", "Review Desk"),
+        ("export", "Draft & Evaluation"),
+    ]
+    nav_columns = st.columns(4)
+    for nav_column, (target_step, nav_label) in zip(nav_columns, nav_targets):
+        if nav_column.button(nav_label):
+            allowed, reason = can_access_snapshot(target_step, snapshot)
+            if allowed:
+                st.session_state[state.CURRENT_STEP] = target_step
+                st.rerun()
+            else:
+                st.warning(reason)
 
-st.divider()
+    st.divider()
 
 notice = st.session_state.get(state.UPLOAD_NOTICE)
 if notice:
@@ -179,8 +185,9 @@ def _render_upload_and_transcribe() -> None:
 VIEWS = {
     "upload": _render_upload_and_transcribe,
     "transcribe": _render_upload_and_transcribe,
-    "review": lambda: review_view.render(snapshot),
-    "export": lambda: export_view.render(snapshot),
+    "review": lambda: review_view.render(snapshot, reviewer),
+    "export": lambda: export_view.render(snapshot, reviewer),
+    "live": lambda: live_view.render(reviewer),
 }
 
 step = st.session_state[state.CURRENT_STEP]

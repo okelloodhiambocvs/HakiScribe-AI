@@ -9,7 +9,7 @@ from backend.core.errors import HakiScribeError
 logger = logging.getLogger(__name__)
 
 _INFO_CODES = frozenset({"already_transcribed", "transcription_in_progress"})
-_WARNING_CODES = frozenset({"transcription_locked"})
+_WARNING_CODES = frozenset({"transcription_locked", "edit_conflict"})
 
 
 def show_error(exc: BaseException) -> None:

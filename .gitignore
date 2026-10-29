@@ -228,3 +228,6 @@ storage/exports/*
 !storage/exports/.gitkeep
 data/*.db
 data/*.db-journal
+
+*.db
+*.db-journal

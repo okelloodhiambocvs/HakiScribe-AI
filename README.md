@@ -3,103 +3,125 @@
 Human-in-the-loop court transcription for Kenyan courts. Built for the **Meta Global Hackathon**.
 
 > **RULE: AI proposes. HUMAN REVIEWS.** Nothing here is official. Every AI output is a draft.
+>
+> **SYNTHETIC DATA ONLY.** Every case, name, script, and document in this repo is fictional. No real litigants, no real court audio.
 
-> **SYNTHETIC DATA ONLY.** Every case, name, script, and document in this repo is fictional (`R v. SYNTHETIC John Doe`, CR 123/2026). No real litigants, no real court audio. See [demo-data/synthetic/README.md](demo-data/synthetic/README.md).
+## The problem
 
-## The one workflow
+Preparing accurate court records is slow manual work, and delays hurt
+access to justice — especially for appellants waiting on records.
+HakiScribe is a prototype review desk that turns a hearing recording
+into a draft transcript which a person reviews and corrects, with every
+change recorded. It preserves English, Kiswahili, and code-switching
+exactly as spoken, and never translates, paraphrases, or adds words.
 
-Upload → Transcribe → Review → Export. Priority 1 (upload + transcribe) is live; the review desk and draft export are next. Design: [ARCHITECTURE-V2.md](docs/architecture/ARCHITECTURE-V2.md), [SCOPE-V2.md](docs/SCOPE-V2.md).
+## What is built
 
-1. **Upload & validate** — synthetic audio (mp3, wav, m4a, aac, adts, ogg, opus, webm); type, size, and attestation checks; SHA-256 hashed and stored with a recording row.
-2. **Transcribe** — Muse Voice Transcribe via Meta Model API (clearly-marked mock fallback offline); segments keep timestamps, speaker turns (Speaker A/B), and verbatim English/Kiswahili/code-switching. The API returns no confidence scores.
-3. **Review desk (next)** — Spark flags, jump-to-audio, reviewer edits and per-segment decisions.
-4. **Draft export + evaluation (next)** — watermarked DOCX draft with WER/CER against the reviewer's corrections.
-
-## Component status
-
-| Area | Status | Notes |
+| Capability | Status | Evidence |
 |---|---|---|
-| Muse Voice Transcribe | Live | DIARIZATION turns + timestamps, no confidence from API (`backend/integrations/meta/voice_transcribe.py`) |
-| Muse Spark review flags | Planned | Later step; the review desk shows an honest preview today |
-| Corrections history | Planned | Repository ready; reviewer save flow is a later step |
-| DOCX draft export | Planned | Later step; no generator yet |
-| WER/CER evaluation | Planned | Later step; placeholders only |
-| Muse Wonder explainer | Parked | `extras/`, not in the core workflow |
-| Muse Image timeline | Parked | `extras/`, not in the core workflow |
-| SAM 3.1 redaction | Parked | `extras/`, not in the core workflow |
-| Muse Glimmer offline | Parked | `extras/`, not in the core workflow |
+| Upload and validate synthetic audio | Live | `tests/test_ingestion_v2.py` |
+| Batch transcription with speaker turns | Live | `tests/test_transcription_v2.py`, `tests/test_voice_diarization.py` |
+| Live microphone transcription | Live | `tests/test_live_transcribe.py` |
+| AI review flags (Spark) | Live | `tests/test_spark_review.py` |
+| Human review and traceable corrections | Live | `tests/test_human_review.py` |
+| Watermarked DOCX draft and WER/CER | Live | `tests/test_draft_export.py` |
+| Kenyan-language measurement | Live | `tests/test_language_evaluation.py`, `scripts/evaluate_asr.py` |
+| Deletion and API evidence | Live | `tests/test_submission_readiness.py`, `scripts/generate_api_evidence.py` |
+| Case request tracking | Planned | `docs/SCOPE-V2.md` |
+| Authorised document access | Planned | `docs/SCOPE-V2.md` |
+| Wonder public explainer | Parked | `extras/README.md` |
+| Image timeline | Parked | `extras/README.md` |
+| SAM 3.1 redaction | Parked | `extras/README.md` |
+| Glimmer offline draft | Parked | `extras/README.md` |
 
-## Human-in-the-loop
+Planned rows are wider-vision items from the scope doc, not scheduled
+work. Parked rows live in `extras/` as reference only.
 
-- Single Reviewer role; a name is required on every decision.
-- `text_original` is immutable — corrections are separate rows with reviewer, timestamp, before/after.
-- The export is always a watermarked DRAFT, never a certified record.
-- No certification, no deadlines, no legal advice anywhere in the system.
+## Six capabilities, mapped to features
 
-## Quickstart
+1. **Upload** — validation card (type, size, attestation, SHA-256), one-click demo loader, privacy notice before capture.
+2. **Transcribe** — Muse Voice Transcribe in DIARIZATION mode (speaker turns, no invented confidence), plus live microphone capture with approximate timestamps and a batch finalise pass.
+3. **AI review** — Muse Spark flags suggestions grouped by severity; hallucinated flags are dropped when evidence is not quoted.
+4. **Human review** — two-pane desk with jump-to-audio, original/read-only beside editable text, accept/edit/dismiss/retain decisions, speaker-role assignment, full history, unresolved-issues panel.
+5. **Draft export** — watermarked DOCX draft with correction log, unresolved issues, and metrics appendices; never an official or certified record.
+6. **Evaluate** — WER/CER of AI vs reviewed text and vs a reference script, speaker attribution, traceability completeness, and review time.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI[Streamlit views] --> WF[workflow_service facade]
+    WF --> SVC[services: ingestion, transcription, review, evaluation, export, live_session, health]
+    SVC --> REPO[repositories: only DB access]
+    SVC --> META[integrations: voice, realtime, spark]
+    REPO --> DB[(SQLite file)]
+    META --> API[Meta Model API]
+```
+
+Layer rules (enforced by `tests/test_architecture_rules.py`): the
+frontend calls only services; only repositories touch the database;
+only integrations call Meta. Details:
+[ARCHITECTURE-V2.md](docs/architecture/ARCHITECTURE-V2.md).
+
+## Meta models actually used
+
+- **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`) — batch DIARIZATION and realtime capture.
+- **Muse Spark** (`muse-spark-1.1`) — review flags; never modifies the transcript.
+- Real Meta calls are proven in [API-EVIDENCE.md](docs/API-EVIDENCE.md), generated from the local call log.
+
+## Setup in five commands
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-copy .env.example .env        # add your dev.meta.ai key, or leave blank for mock mode
+copy .env.example .env        # add META_API_KEY, or leave blank for mock mode
 streamlit run frontend/app.py
 ```
 
-Demo flow (works fully offline in mock mode):
-
-One-click demo: enter your reviewer name and press **Load demo recording**
-(expects `demo-data/synthetic/case-cr-123-2026.wav`; generate it with
-`scripts/make_demo_audio.ps1`).
-
-1. Enter your reviewer name.
-2. Upload a synthetic hearing file and tick the attestation box.
-3. Transcribe (mock mode needs no key) and read the timestamped segments.
-
 ```bash
-pytest   # 113 tests, all passing
+pytest   # full offline suite
 ```
 
-## Project structure
+## Demo script (5 minutes)
 
-```
-frontend/app.py               # Streamlit Review Desk (Priority 1: upload + transcribe)
-backend/core/config.py        # .env loading + Meta model names + key validation
-backend/services/             # ingestion_service, transcription_service (review/export next)
-backend/repositories/         # recordings, segments, flags, corrections, exports (only DB access)
-backend/integrations/meta/    # voice_transcribe.py — the only Meta API call site
-database/                     # SQLite schema + connection (data/hakiscribe.db, gitignored)
-storage/uploads/  storage/exports/   # synthetic files only (gitignored)
-data/                         # local SQLite file lives here (gitignored)
-extras/                       # parked V1 client modules, reference only
-docs/architecture/ARCHITECTURE-V2.md # layer design + schema
-docs/SCOPE-V2.md              # submission scope + deferred list
-demo-data/synthetic/          # fictional script + charge sheet + demo wav
-scripts/make_demo_audio.ps1   # render the demo wav with Windows voices
-tests/                        # test_database_v2, test_ingestion_v2, test_transcription_v2
-```
+1. Enter a reviewer name, press **Load demo recording**.
+2. Press **Transcribe Recording** (mock or real) and read the turns.
+3. Open **Review Desk**, press **Run AI review**, open a flag.
+4. Play the passage, edit the text, record a decision with a reason.
+5. Open **Draft & Evaluation**, generate the DOCX, read the metrics.
 
-## Configuration
+Timed version with checklist: [JUDGE-DEMO.md](docs/JUDGE-DEMO.md).
 
-| Variable | Purpose |
-|---|---|
-| `META_API_KEY` | dev.meta.ai key; blank/placeholder = mock mode |
-| `META_API_BASE` | Model API base URL (default `https://api.meta.ai/v1`) |
-| `META_VOICE_MODEL` | Voice Transcribe model name (live) |
-| `META_VOICE_MODE` | `DIARIZATION` (default), `PUSH_TO_TALK`, or `ENDPOINTING` |
-| `META_LANGUAGE_BIAS` | Comma list, e.g. `English,Kiswahili`; empty = not sent |
-| `backend/core/keywords.txt` | One court term per line (max 50 x 40 chars); sent as `keywords` |
-| `META_REASONING_MODEL` / `META_WONDER_MODEL` | Spark / Wonder model names (flagging next) |
-| `META_SAM_MODEL` / `META_IMAGE_MODEL` / `META_OPEN_MODEL` / `GLIMMER_MODEL_PATH` | Parked-model settings (unused by V2 core) |
-| `HAKISCRIBE_DB_PATH` | Override for the SQLite file (default `data/hakiscribe.db`) |
+## Evaluation and limitations
 
-## Deferred scope
+- Kenyan-language accuracy is measured, never claimed:
+  [evaluation/README.md](evaluation/README.md),
+  [EVALUATION.md](docs/EVALUATION.md),
+  [LANGUAGE-LIMITATIONS.md](docs/LANGUAGE-LIMITATIONS.md).
+- Accuracy can drop with accents, overlapping speech, background noise,
+  and mixed languages. Always verify against the audio.
+- Mock mode is clearly labelled everywhere and measures nothing.
 
-Deliberately not built for this submission ([SCOPE-V2.md](docs/SCOPE-V2.md)): certification and signatures, deadline prediction, legal advice, real-case data and Judiciary integrations, the Wonder public explainer, Image timelines, SAM redaction, and offline Glimmer.
+## Privacy and retention
+
+Audio is sent to the Meta Model API for processing — use only
+synthetic or consented recordings. Recordings and exports stay on your
+machine (`storage/`, `data/hakiscribe.db`, both gitignored) until you
+delete them in the app (Recording panel → Delete, typed confirmation)
+or remove the files; deletion keeps only a content-free log entry
+(recording id, time, reviewer). Logs and error messages never contain
+API keys, audio, or transcript text.
+
+## Scope exclusions
+
+Not provided: no certification, no legal advice, no appeal decisions,
+no real records, no deadline or sentencing analysis, no Judiciary
+integration. Full list: [SCOPE-V2.md](docs/SCOPE-V2.md).
 
 ## Build log
 
-- [HACKATHON-LOG.md](HACKATHON-LOG.md) — proof of new work, steps 1–14.
+- [HACKATHON-LOG.md](HACKATHON-LOG.md) — proof of new work.
 - [MUSE-CODE-LOG.md](MUSE-CODE-LOG.md) — what was built with Muse Code.
 
 ## License

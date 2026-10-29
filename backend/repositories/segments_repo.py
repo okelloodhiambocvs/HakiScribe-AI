@@ -35,8 +35,9 @@ def _insert_segment_row(conn, recording_id: int, seg: dict) -> int:
     cur = conn.execute(
         """INSERT INTO segments
            (recording_id, idx, start_sec, end_sec, speaker, speaker_label,
-            confidence, language, text_original, text_current)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            confidence, language, text_original, text_current,
+            is_approximate)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             recording_id,
             seg["idx"],
@@ -48,6 +49,7 @@ def _insert_segment_row(conn, recording_id: int, seg: dict) -> int:
             seg.get("language") or "mixed",
             seg["text_original"],
             seg["text_original"],
+            int(seg.get("is_approximate") or 0),
         ),
     )
     return cur.lastrowid
@@ -69,6 +71,7 @@ def create_segment(
     text_original: str,
     language: str = "mixed",
     speaker_label: str | None = None,
+    is_approximate: int = 0,
     db_path: str | Path | None = None,
 ) -> int:
     """Insert one segment; text_current starts equal to text_original."""
@@ -78,8 +81,9 @@ def create_segment(
         cur = conn.execute(
             """INSERT INTO segments
                (recording_id, idx, start_sec, end_sec, speaker, speaker_label,
-                confidence, language, text_original, text_current)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                confidence, language, text_original, text_current,
+                is_approximate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 recording_id,
                 idx,
@@ -91,6 +95,7 @@ def create_segment(
                 language,
                 text_original,
                 text_original,
+                int(is_approximate),
             ),
         )
         conn.commit()

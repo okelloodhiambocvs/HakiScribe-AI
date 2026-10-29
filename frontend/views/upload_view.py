@@ -6,6 +6,7 @@ from backend.services import workflow_service
 from backend.services.workflow_service import WorkflowSnapshot
 from frontend import state
 from frontend.components.errors import show_error
+from frontend.components.privacy import PRIVACY_NOTICE
 
 
 def _format_file_size(num_bytes: int) -> str:
@@ -46,6 +47,7 @@ def render(reviewer: str, snapshot: WorkflowSnapshot | None) -> None:
     upload_box.caption(
         "MP3, WAV, M4A, AAC, ADTS, OGG, OPUS, WEBM - synthetic recordings only"
     )
+    upload_box.info(PRIVACY_NOTICE)
     attested = upload_box.checkbox(
         "I confirm this is a synthetic demo recording with no real litigants"
     )

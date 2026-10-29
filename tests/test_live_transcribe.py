@@ -51,8 +51,10 @@ _FULL_TURN_SCRIPT = [
     "audio",
     {"type": "speaker", "turnId": 3, "speaker": "A"},
     {"type": "speechEnd", "turnId": 3},
+    "endstream",
     {"type": "speechComplete", "turnId": 3,
      "transcript": "Mheshimiwa, kesi namba tano."},
+    "close",
 ]
 
 
@@ -82,12 +84,19 @@ def _run(coro):
 
 
 class _FakeRealtimeServer:
-    """Scripted fake: records the first frame, replays scripted events."""
+    """Scripted fake: records frames in order, replays scripted events.
+
+    Script steps: "audio" (expect one binary frame), "endstream" (skip
+    binary frames until the endStream text frame), "close" or {"close":
+    code} (close the socket), or a dict (send one event). Anything
+    received after the script is recorded while the socket stays open.
+    """
 
     def __init__(self, script):
         self.script = script
         self.first_frame = None
         self.binary_frames = []
+        self.received = []
 
     async def handler(self, websocket):
         self.first_frame = await websocket.recv()
@@ -95,12 +104,44 @@ class _FakeRealtimeServer:
         for step in self.script:
             if step == "audio":
                 message = await websocket.recv()
+                assert isinstance(message, bytes), (
+                    f"expected audio, got {message!r}"
+                )
                 self.binary_frames.append(message)
+                self.received.append(("binary", len(message)))
+            elif step == "endstream":
+                await self._expect_endstream(websocket)
+            elif step == "close" or (
+                isinstance(step, dict) and "close" in step
+            ):
+                if isinstance(step, dict):
+                    code = step.get("close", 1000)
+                else:
+                    code = 1000
+                await websocket.close(code=code)
+                return
             else:
                 await websocket.send(json.dumps(step))
         async for message in websocket:
             if isinstance(message, bytes):
                 self.binary_frames.append(message)
+                self.received.append(("binary", len(message)))
+            else:
+                self.received.append(("text", message))
+
+    async def _expect_endstream(self, websocket):
+        while True:
+            message = await websocket.recv()
+            if isinstance(message, bytes):
+                self.binary_frames.append(message)
+                self.received.append(("binary", len(message)))
+                continue
+            data = json.loads(message)
+            assert data == {"type": "endStream"}, (
+                f"expected endStream, got {data!r}"
+            )
+            self.received.append(("endstream", data))
+            return
 
 
 async def _with_fake_server(script, client_factory):
@@ -169,8 +210,6 @@ def _wait_for(predicate, timeout=10.0):
 
 
 def test_client_sends_exact_first_frame_and_pcm_frames():
-    stop = threading.Event()
-
     async def go(url):
         events = []
         client = RealtimeClient(
@@ -185,12 +224,13 @@ def test_client_sends_exact_first_frame_and_pcm_frames():
 
         async def frames():
             yield b"\x01\x02" * (BLOCK_BYTES // 2)
-            stop.set()
 
-        summary = await client.run(frames(), stop_event=stop)
+        summary = await client.run(frames())
         return summary, events
 
-    server, (summary, events) = _run(_with_fake_server(["audio"], go))
+    server, (summary, events) = _run(
+        _with_fake_server(["audio", "endstream", "close"], go)
+    )
     first = json.loads(server.first_frame)
     assert first["authorization"] == {"accessToken": f"Bearer {FAKE_KEY}"}
     assert first["audioEncoding"] == "PCM_24KHZ"
@@ -206,42 +246,49 @@ def test_client_sends_exact_first_frame_and_pcm_frames():
     assert summary["server_session_id"] == "fake-session-1"
     assert summary["frames_sent"] == 1
     assert summary["audio_bytes"] == BLOCK_BYTES
+    assert summary["completed"] is True
+    assert summary["close_code"] == 1000
+    assert server.received == [
+        ("binary", 3840),
+        ("endstream", {"type": "endStream"}),
+    ]
     assert FAKE_KEY not in json.dumps(events, default=str)
 
 
 def test_client_emits_partials_complete_and_speaker():
-    stop = threading.Event()
     script = [
         "audio",
         {"type": "speechStart", "turnId": 7},
         {"type": "transcript", "turnId": 7, "transcript": "Mheshimiwa"},
         {"type": "speaker", "turnId": 7, "speaker": "B"},
         {"type": "speechEnd", "turnId": 7},
+        "endstream",
         {"type": "speechComplete", "turnId": 7,
          "transcript": "Mheshimiwa, kesi namba tano."},
+        "close",
     ]
 
     async def go(url):
         events = []
-
-        def on_event(event):
-            events.append(event)
-            if event.type == "speechComplete":
-                stop.set()
-
         client = RealtimeClient(
             api_key=FAKE_KEY,
             model="muse-voice-transcribe-1.0",
-            on_event=on_event,
+            on_event=events.append,
             url=url,
         )
 
         async def frames():
-            while not stop.is_set():
+            for _ in range(3):
                 yield b"\x00" * BLOCK_BYTES
-                await asyncio.sleep(0.01)
 
-        summary = await client.run(frames(), stop_event=stop)
+        summary = await client.run(frames())
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name().startswith("hakiscribe-realtime-")
+            and not task.done()
+        ]
+        assert pending == []
         return summary, events
 
     server, (summary, events) = _run(_with_fake_server(script, go))
@@ -259,6 +306,8 @@ def test_client_emits_partials_complete_and_speaker():
     speaker = [item for item in events if item.type == "speaker"][0]
     assert speaker.speaker == "B"
     assert summary["server_session_id"] == "fake-session-1"
+    assert summary["completed"] is True
+    assert summary["close_code"] == 1000
 
 
 def test_client_error_event_raises_and_keeps_received():
@@ -519,8 +568,9 @@ def test_stop_persists_wav_recording_and_approximate_segments(
         state = _wait_for(lambda s: s["turn_count"] >= 1)
         assert state["turn_count"] == 1
         assert state["status"] == "live"
-        state = live_session_service.stop_live_session()
+        state = _wait_for(lambda s: s["status"] == "ended")
         assert state["status"] == "ended"
+        assert state["note"] == "Completed."
         assert state["recording_id"] is not None
         assert FAKE_KEY not in json.dumps(state, default=str)
 
@@ -655,3 +705,215 @@ def test_live_view_idle_renders():
     app.session_state["current_step"] = "live"
     app.run()
     assert not app.exception
+
+
+def test_endstream_is_sent_after_last_audio_frame():
+    async def go(url):
+        events = []
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=events.append,
+            url=url,
+        )
+
+        async def frames():
+            for _ in range(3):
+                yield b"\x11" * BLOCK_BYTES
+
+        summary = await client.run(frames())
+        return summary, events
+
+    script = ["audio", "audio", "audio", "endstream", "close"]
+    server, (summary, events) = _run(_with_fake_server(script, go))
+    assert server.received == [("binary", 3840)] * 3 + [
+        ("endstream", {"type": "endStream"})
+    ]
+    assert summary["frames_sent"] == 3
+    assert summary["completed"] is True
+    assert summary["close_code"] == 1000
+
+
+def test_finals_after_audio_are_processed_before_completion():
+    script = [
+        "audio",
+        "endstream",
+        {"type": "transcript", "turnId": 9, "transcript": "late partial"},
+        {"type": "speechComplete", "turnId": 9, "transcript": "late final"},
+        "close",
+    ]
+
+    async def go(url):
+        events = []
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=events.append,
+            url=url,
+        )
+
+        async def frames():
+            yield b"\x00" * BLOCK_BYTES
+
+        summary = await client.run(frames())
+        return summary, events
+
+    _server, (summary, events) = _run(_with_fake_server(script, go))
+    kinds = [event.type for event in events]
+    assert "transcript" in kinds
+    assert "speechComplete" in kinds
+    complete = [item for item in events if item.type == "speechComplete"][0]
+    assert complete.text == "late final"
+    assert summary["completed"] is True
+    assert summary["close_code"] == 1000
+
+
+def test_abnormal_close_raises_dropped_error():
+    async def go(url):
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=lambda event: None,
+            url=url,
+        )
+
+        async def frames():
+            yield b"\x00" * BLOCK_BYTES
+
+        with pytest.raises(RealtimeError, match="1011") as exc_info:
+            await client.run(frames())
+        assert exc_info.value.error_code == "CONNECTION_DROPPED"
+
+    _run(_with_fake_server(["audio", {"close": 1011}], go))
+
+
+def test_early_close_before_endstream_is_not_success():
+    async def go(url):
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=lambda event: None,
+            url=url,
+        )
+
+        async def frames():
+            yield b"\x00" * BLOCK_BYTES
+            await asyncio.sleep(30)
+
+        with pytest.raises(RealtimeError, match="before all audio was sent"):
+            await client.run(frames())
+
+    _run(_with_fake_server(["audio", "close"], go))
+
+
+def test_completion_timeout_when_server_never_closes():
+    async def go(url):
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=lambda event: None,
+            url=url,
+            completion_timeout=0.3,
+        )
+
+        async def frames():
+            yield b"\x00" * BLOCK_BYTES
+
+        with pytest.raises(
+            RealtimeError, match="completion timed out"
+        ) as exc_info:
+            await client.run(frames())
+        assert exc_info.value.error_code == "COMPLETION_TIMEOUT"
+
+    _run(_with_fake_server(["audio"], go))
+
+
+def test_configured_connect_timeout_is_respected():
+    async def blackhole(reader, writer):
+        try:
+            await reader.read(-1)
+        finally:
+            writer.close()
+
+    async def go():
+        server = await asyncio.start_server(blackhole, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=lambda event: None,
+            url=f"ws://127.0.0.1:{port}",
+            handshake_timeout=0.25,
+        )
+
+        async def frames():
+            yield b"\x00" * BLOCK_BYTES
+
+        started = time.monotonic()
+        try:
+            with pytest.raises(RealtimeError, match="connection failed"):
+                await client.run(frames())
+        finally:
+            server.close()
+            await server.wait_closed()
+        return time.monotonic() - started
+
+    assert _run(go()) < 2.0
+
+
+def test_cancel_cleans_up_tasks_and_socket():
+    async def go(url):
+        client = RealtimeClient(
+            api_key=FAKE_KEY,
+            model="m",
+            on_event=lambda event: None,
+            url=url,
+        )
+
+        async def frames():
+            while True:
+                yield b"\x00" * BLOCK_BYTES
+                await asyncio.sleep(0.01)
+
+        task = asyncio.ensure_future(client.run(frames()))
+        await asyncio.sleep(0.3)
+        running = [
+            item
+            for item in asyncio.all_tasks()
+            if item.get_name().startswith("hakiscribe-realtime-")
+        ]
+        assert len(running) == 2
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        live = []
+        for _ in range(100):
+            live = [
+                item
+                for item in asyncio.all_tasks()
+                if item.get_name().startswith("hakiscribe-realtime-")
+                and not item.done()
+            ]
+            if not live:
+                break
+            await asyncio.sleep(0.02)
+        assert live == []
+
+    _run(_with_fake_server(["audio"], go))
+
+
+def test_stop_marks_session_stopped(monkeypatch, tmp_path):
+    server, url, stop_server = _serve_in_thread(["audio"])
+    try:
+        kwargs = _start_kwargs(monkeypatch, tmp_path, url)
+        live_session_service.start_live_session("Reviewer Amina", True, **kwargs)
+        state = _wait_for(lambda s: s["status"] == "live")
+        assert state["status"] == "live"
+        state = live_session_service.stop_live_session()
+        assert state["status"] == "ended"
+        assert state["note"] == "Stopped."
+        assert state["recording_id"] is not None
+    finally:
+        live_session_service.stop_live_session()
+        stop_server()

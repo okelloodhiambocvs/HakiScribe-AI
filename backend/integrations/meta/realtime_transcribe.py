@@ -4,9 +4,11 @@ Protocol (Meta quickstart): connect to
 wss://api.meta.ai/v1/asr/realtime?sessionId=<uuid> (no auth header — it
 is ignored), send the JSON config frame first, await the {"sessionId"}
 reply, then stream 80 ms binary PCM frames (24 kHz mono int16, 3840
-bytes). Server events are JSON text frames. No mid-session reconnect:
-a dropped socket ends the session with an error; received turns are
-kept by the caller. The API key never appears in messages or logs.
+bytes). After the last frame, send {"type":"endStream"} and keep
+receiving until the server closes normally (code 1000). A completion
+timeout, server error, or abnormal close raises instead. No mid-session
+reconnect: received turns are kept by the caller. The API key never
+appears in messages or logs.
 """
 
 import asyncio
@@ -25,8 +27,9 @@ REALTIME_PATH = "/asr/realtime"
 DEFAULT_BASE_URL = "wss://api.meta.ai/v1"
 HANDSHAKE_TIMEOUT_SECONDS = 10.0
 RECEIVE_POLL_SECONDS = 0.5
-POST_AUDIO_DRAIN_SECONDS = 3.0
+COMPLETION_TIMEOUT_SECONDS = 60.0
 AUDIO_ENCODING = "PCM_24KHZ"
+END_STREAM_MESSAGE = '{"type":"endStream"}'
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,17 @@ def _first_present(payload: dict, *names):
         if payload.get(name) is not None:
             return payload.get(name)
     return None
+
+
+def _close_code(exc: ConnectionClosed) -> int:
+    """Close code without the deprecated ConnectionClosed.code property."""
+    rcvd = getattr(exc, "rcvd", None)
+    if rcvd is not None and rcvd.code is not None:
+        return int(rcvd.code)
+    sent = getattr(exc, "sent", None)
+    if sent is not None and sent.code is not None:
+        return int(sent.code)
+    return 1006
 
 
 def parse_event(payload: object) -> RealtimeEvent:
@@ -78,6 +92,7 @@ class RealtimeClient:
         url: str | None = None,
         session_id: str | None = None,
         handshake_timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
+        completion_timeout: float = COMPLETION_TIMEOUT_SECONDS,
     ):
         if not api_key:
             raise RealtimeError("realtime transcription needs an API key")
@@ -90,6 +105,7 @@ class RealtimeClient:
         self._base = (url or DEFAULT_BASE_URL).rstrip("/")
         self._client_session_id = session_id or str(uuid.uuid4())
         self._handshake_timeout = handshake_timeout
+        self._completion_timeout = completion_timeout
 
     def _config_frame(self) -> str:
         """Build the first-frame JSON (the only place the key is sent)."""
@@ -132,12 +148,15 @@ class RealtimeClient:
         return parse_event(payload)
 
     async def run(self, frame_source, stop_event=None) -> dict:
-        """Stream frames until the source ends, stop is set, or an error.
+        """Run one session: handshake, stream, endStream, await close.
 
         frame_source is an async iterable of bytes; stop_event is a
-        threading.Event checked between frames and polls. Returns the
-        handshake/session summary. Raises RealtimeError on connect,
-        handshake, protocol, or socket failure.
+        threading.Event checked between frames and polls. After the
+        source is exhausted the client sends {"type":"endStream"} and
+        keeps receiving until the server closes normally (code 1000).
+        Returns the session summary with completed/close_code. Raises
+        RealtimeError on connect, handshake, protocol, completion
+        timeout, or abnormal socket closure.
         """
         uri = (
             f"{self._base}{REALTIME_PATH}"
@@ -145,7 +164,7 @@ class RealtimeClient:
         )
         try:
             ws = await asyncio.wait_for(
-                websockets.connect(uri), timeout=HANDSHAKE_TIMEOUT_SECONDS
+                websockets.connect(uri), timeout=self._handshake_timeout
             )
         except (TimeoutError, OSError) as exc:
             raise RealtimeError(
@@ -171,9 +190,15 @@ class RealtimeClient:
                 )
             )
             sender_done = False
+            sender_done_at: float | None = None
+            endstream_sent = False
+            completed = False
+            close_code: int | None = None
+            last_activity = time.monotonic()
 
             async def _send_frames() -> None:
-                nonlocal frames_sent, audio_bytes, sender_done
+                nonlocal frames_sent, audio_bytes
+                nonlocal sender_done, sender_done_at, endstream_sent
                 try:
                     async for chunk in frame_source:
                         if stop_event is not None and stop_event.is_set():
@@ -181,32 +206,56 @@ class RealtimeClient:
                         await ws.send(chunk)
                         frames_sent += 1
                         audio_bytes += len(chunk)
+                    if stop_event is None or not stop_event.is_set():
+                        await ws.send(END_STREAM_MESSAGE)
+                        endstream_sent = True
                 finally:
                     sender_done = True
+                    sender_done_at = time.monotonic()
 
             async def _receive_loop() -> None:
-                quiet = 0.0
+                nonlocal completed, close_code, last_activity
                 while True:
                     if stop_event is not None and stop_event.is_set():
                         return
+                    if sender_done:
+                        base = max(
+                            sender_done_at or 0.0, last_activity
+                        )
+                        if time.monotonic() - base >= self._completion_timeout:
+                            raise RealtimeError(
+                                "realtime completion timed out: the server "
+                                "did not close the session",
+                                error_code="COMPLETION_TIMEOUT",
+                            )
                     try:
                         message = await asyncio.wait_for(
                             ws.recv(), timeout=RECEIVE_POLL_SECONDS
                         )
                     except TimeoutError:
-                        if sender_done:
-                            quiet += RECEIVE_POLL_SECONDS
-                            if quiet >= POST_AUDIO_DRAIN_SECONDS:
-                                return
                         continue
                     except ConnectionClosed as exc:
                         if stop_event is not None and stop_event.is_set():
                             return
+                        code = _close_code(exc)
+                        if code == 1000 and endstream_sent:
+                            completed = True
+                            close_code = code
+                            return
+                        if code == 1000:
+                            raise RealtimeError(
+                                "realtime connection closed before all "
+                                "audio was sent (code 1000)",
+                                error_code="CONNECTION_DROPPED",
+                            ) from exc
                         raise RealtimeError(
-                            f"realtime connection dropped: {exc}",
+                            self._scrub(
+                                "realtime connection closed abnormally "
+                                f"(code {code})"
+                            ),
                             error_code="CONNECTION_DROPPED",
                         ) from exc
-                    quiet = 0.0
+                    last_activity = time.monotonic()
                     event = self._parse_message(message)
                     if event is None:
                         continue
@@ -218,26 +267,46 @@ class RealtimeClient:
                         )
                     await self._emit(event)
 
-            sender = asyncio.ensure_future(_send_frames())
-            receiver = asyncio.ensure_future(_receive_loop())
+            loop = asyncio.get_running_loop()
+            sender = loop.create_task(
+                _send_frames(), name="hakiscribe-realtime-sender"
+            )
+            receiver = loop.create_task(
+                _receive_loop(), name="hakiscribe-realtime-receiver"
+            )
             receiver_error = None
             try:
                 await receiver
             except RealtimeError as exc:
                 receiver_error = exc
             finally:
-                if not sender.done():
-                    sender.cancel()
+                for task in (receiver, sender):
+                    if not task.done():
+                        task.cancel()
+                results = None
                 try:
-                    await sender
+                    results = await asyncio.gather(
+                        receiver, sender, return_exceptions=True
+                    )
                 except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
-                    if receiver_error is None and not (
-                        stop_event is not None and stop_event.is_set()
+                    results = None
+                if results is not None:
+                    sender_result = results[1]
+                    if (
+                        receiver_error is None
+                        and not completed
+                        and isinstance(sender_result, Exception)
+                        and not isinstance(
+                            sender_result, asyncio.CancelledError
+                        )
+                        and not (
+                            stop_event is not None and stop_event.is_set()
+                        )
                     ):
                         receiver_error = RealtimeError(
-                            self._scrub(f"realtime send failed: {exc}"),
+                            self._scrub(
+                                f"realtime send failed: {sender_result}"
+                            ),
                             error_code="SEND_FAILED",
                         )
             if receiver_error is not None:
@@ -247,6 +316,8 @@ class RealtimeClient:
                 "handshake_latency_ms": latency_ms,
                 "frames_sent": frames_sent,
                 "audio_bytes": audio_bytes,
+                "completed": completed,
+                "close_code": close_code,
             }
         finally:
             try:
@@ -276,7 +347,8 @@ class RealtimeClient:
                 ) from exc
             except ConnectionClosed as exc:
                 raise RealtimeError(
-                    f"realtime handshake failed: connection closed ({exc.code})",
+                    "realtime handshake failed: connection closed "
+                    f"({_close_code(exc)})",
                     error_code="HANDSHAKE_CLOSED",
                 ) from exc
             event = self._parse_message(message)

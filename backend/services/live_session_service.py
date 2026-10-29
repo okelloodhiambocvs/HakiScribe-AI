@@ -290,7 +290,7 @@ async def _session_coro(
             context["outcome"] = "error"
             return
         try:
-            await asyncio.wait_for(
+            summary = await asyncio.wait_for(
                 _run_client(client, source, writer, context, stop_event),
                 timeout=LIVE_SESSION_MAX_SECONDS,
             )
@@ -307,8 +307,11 @@ async def _session_coro(
             )
         else:
             with _LOCK:
-                if stop_event.is_set() and _STATE.note is None:
-                    _STATE.note = "Stopped."
+                if _STATE.note is None:
+                    if stop_event.is_set():
+                        _STATE.note = "Stopped."
+                    elif summary.get("completed"):
+                        _STATE.note = "Completed."
             context["outcome"] = "ended"
     finally:
         try:

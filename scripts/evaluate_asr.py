@@ -10,6 +10,7 @@ exits non-zero without writing.
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -25,6 +26,8 @@ from backend.integrations.meta import voice_transcribe  # noqa: E402
 from backend.services import evaluation_service  # noqa: E402
 
 CATEGORIES = ("english", "kiswahili", "code_switched")
+SUPPORTED_MANIFEST_VERSION = 1
+_HASH_CHUNK_BYTES = 65536
 
 
 def _load_manifest(path: Path) -> dict:
@@ -42,6 +45,30 @@ def _load_manifest(path: Path) -> dict:
     ):
         raise ValueError(f'manifest must be {{"clips": [...]}}: {path}')
     return manifest
+
+
+def _manifest_version(manifest: dict, path: Path) -> int:
+    """Return the manifest version; reject missing/invalid/unsupported."""
+    version = manifest.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError(f"manifest version must be an integer: {path}")
+    if version <= 0:
+        raise ValueError(f"manifest version must be positive: {path}")
+    if version != SUPPORTED_MANIFEST_VERSION:
+        raise ValueError(
+            f"unsupported manifest version {version}: {path} "
+            f"(supported: {SUPPORTED_MANIFEST_VERSION})"
+        )
+    return version
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Lowercase hex SHA-256 of a file, read in fixed-size chunks."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _validate_clip(entry: object) -> dict:
@@ -64,13 +91,22 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
 
     transcribe_fn(audio_path) defaults to the real batch code path and
     must return {"segments": [{"idx", "text_original", ...}]}. Raises
-    FileNotFoundError for missing clip files (never partial results).
+    FileNotFoundError for missing clip files (never partial results)
+    and ValueError for a missing, invalid, or unsupported manifest
+    version. transcription_source names the selected code path only;
+    it is not proof of an external provider request.
     """
     manifest_path = Path(manifest_path)
     base = manifest_path.parent
     manifest = _load_manifest(manifest_path)
+    version = _manifest_version(manifest, manifest_path)
     clips = [_validate_clip(entry) for entry in manifest["clips"]]
-    transcribe = transcribe_fn or voice_transcribe.transcribe_audio_file
+    if transcribe_fn is None:
+        transcribe = voice_transcribe.transcribe_audio_file
+        transcription_source = "provider_integration"
+    else:
+        transcribe = transcribe_fn
+        transcription_source = "injected"
     scored = []
     for clip in clips:
         audio_path = base / clip["audio"]
@@ -84,6 +120,7 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
                 f"clip {clip['id']!r}: reference file missing: {ref_path}"
             )
         reference = ref_path.read_text(encoding="utf-8").strip()
+        audio_sha256 = _sha256_of_file(audio_path)
         result = transcribe(str(audio_path))
         segments = sorted(
             result.get("segments", []), key=lambda item: item.get("idx", 0)
@@ -107,6 +144,7 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
                 "hyp_words": len(
                     evaluation_service.normalize_text(hypothesis).split()
                 ),
+                "audio_sha256": audio_sha256,
                 "hypothesis": hypothesis,
             }
         )
@@ -142,6 +180,8 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
         "mode": config.get_voice_mode(),
         "language_bias": config.get_language_bias(),
         "keyword_count": len(config.get_keywords()),
+        "manifest_version": version,
+        "transcription_source": transcription_source,
         "counts": {"clips": len(scored)},
         "clips": scored,
         "categories": categories,

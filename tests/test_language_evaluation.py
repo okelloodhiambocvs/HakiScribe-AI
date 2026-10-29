@@ -1,6 +1,7 @@
 """Guardrails for measured evaluation and honest limitation reporting."""
 
 import ast
+import hashlib
 import importlib.util
 import json
 import re
@@ -358,3 +359,146 @@ def test_shipped_manifest_is_valid():
         assert clip["category"] in ("english", "kiswahili", "code_switched")
         assert (ROOT / "evaluation" / clip["audio"]).is_file()
         assert (ROOT / "evaluation" / clip["reference"]).is_file()
+
+
+_PROVENANCE_CLIPS = (
+    (
+        "sw1",
+        "kiswahili",
+        b"RIFFswahili-audio-bytes-001",
+        "mahakama imeahirishwa hadi kesho",
+    ),
+    (
+        "en1",
+        "english",
+        b"RIFFenglish-audio-bytes-001",
+        "court is now in session",
+    ),
+)
+
+
+def _write_provenance_fixture(base: Path, version=1):
+    """Two-clip eval fixture with deterministic audio; manifest path."""
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    clips = []
+    for clip_id, category, audio_bytes, ref_text in _PROVENANCE_CLIPS:
+        (base / "audio" / f"{clip_id}.wav").write_bytes(audio_bytes)
+        (base / "reference" / f"{clip_id}.txt").write_text(
+            ref_text, encoding="utf-8"
+        )
+        clips.append(
+            {
+                "id": clip_id,
+                "category": category,
+                "audio": f"audio/{clip_id}.wav",
+                "reference": f"reference/{clip_id}.txt",
+            }
+        )
+    manifest = {"clips": clips}
+    if version is not None:
+        manifest["version"] = version
+    path = base / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+def _exact_transcribe(audio_path):
+    """Injected transcription returning each clip's reference text."""
+    refs = {clip_id: text for clip_id, _, _, text in _PROVENANCE_CLIPS}
+    return {
+        "segments": [{"idx": 0, "text_original": refs[Path(audio_path).stem]}]
+    }
+
+
+def test_run_evaluation_records_version_and_injected_source(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval")
+    results = evaluate.run_evaluation(
+        manifest, transcribe_fn=_exact_transcribe
+    )
+    assert results["manifest_version"] == 1
+    assert results["transcription_source"] == "injected"
+    assert results["counts"] == {"clips": 2}
+    for key in (
+        "run_at",
+        "model",
+        "mode",
+        "language_bias",
+        "keyword_count",
+        "clips",
+        "categories",
+    ):
+        assert key in results
+    assert results["categories"]["kiswahili"]["wer"] == 0.0
+    assert results["categories"]["english"]["wer"] == 0.0
+    assert results["categories"]["code_switched"]["wer"] is None
+
+
+@pytest.mark.parametrize(
+    "version", [None, "1", 1.5, True, 0, -1, 2]
+)
+def test_run_evaluation_rejects_bad_manifest_version(tmp_path, version):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval", version=version)
+    with pytest.raises(ValueError, match="[Vv]ersion"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+def test_run_evaluation_records_audio_sha256(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval")
+    results = evaluate.run_evaluation(
+        manifest, transcribe_fn=_exact_transcribe
+    )
+    by_id = {clip["id"]: clip for clip in results["clips"]}
+    for clip_id, _, audio_bytes, _ in _PROVENANCE_CLIPS:
+        expected = hashlib.sha256(audio_bytes).hexdigest()
+        assert by_id[clip_id]["audio_sha256"] == expected
+        assert len(expected) == 64
+        assert expected == expected.lower()
+
+
+def test_audio_sha256_changes_with_audio_bytes(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    manifest = _write_provenance_fixture(base)
+    first = evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+    changed_bytes = b"RIFFswahili-audio-bytes-002"
+    (base / "audio" / "sw1.wav").write_bytes(changed_bytes)
+    second = evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+    first_by_id = {clip["id"]: clip for clip in first["clips"]}
+    second_by_id = {clip["id"]: clip for clip in second["clips"]}
+    assert second_by_id["sw1"]["audio_sha256"] == hashlib.sha256(
+        changed_bytes
+    ).hexdigest()
+    assert (
+        second_by_id["sw1"]["audio_sha256"]
+        != first_by_id["sw1"]["audio_sha256"]
+    )
+    assert (
+        second_by_id["en1"]["audio_sha256"]
+        == first_by_id["en1"]["audio_sha256"]
+    )
+
+
+def test_default_path_reports_provider_integration(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval")
+    calls = []
+
+    def fake_integration(audio_path):
+        calls.append(audio_path)
+        return {
+            "segments": [{"idx": 0, "text_original": "court is now in session"}]
+        }
+
+    monkeypatch.setattr(
+        evaluate.voice_transcribe, "transcribe_audio_file", fake_integration
+    )
+    results = evaluate.run_evaluation(manifest)
+    assert results["transcription_source"] == "provider_integration"
+    assert results["manifest_version"] == 1
+    assert len(calls) == 2
+    assert all(str(call).endswith(".wav") for call in calls)
+    assert results["categories"]["english"]["wer"] == 0.0

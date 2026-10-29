@@ -117,7 +117,10 @@ def build_request_payload(
 def _turn_to_segment(turn: dict, idx: int) -> dict:
     """Map one documented turn to a segment; verbatim text, NULL confidence."""
     if not isinstance(turn, dict):
-        raise ValueError(f"bad API turn {idx}: {turn!r}")
+        raise ValueError(
+            f"bad API turn {idx}: expected an object, "
+            f"got {type(turn).__name__}"
+        )
     for field in ("startMs", "endMs", "transcript"):
         if turn.get(field) is None:
             raise ValueError(f"API turn {idx} missing {field}")
@@ -125,10 +128,16 @@ def _turn_to_segment(turn: dict, idx: int) -> dict:
         start_sec = float(turn["startMs"]) / 1000
         end_sec = float(turn["endMs"]) / 1000
     except (TypeError, ValueError):
-        raise ValueError(f"bad timestamps in API turn {idx}: {turn!r}") from None
+        raise ValueError(
+            f"bad timestamps in API turn {idx}: "
+            f"startMs={turn.get('startMs')!r} endMs={turn.get('endMs')!r}"
+        ) from None
     text = turn["transcript"]
     if not isinstance(text, str):
-        raise ValueError(f"bad transcript in API turn {idx}: {text!r}")
+        raise ValueError(
+            f"bad transcript in API turn {idx}: expected a string, "
+            f"got {type(text).__name__}"
+        )
     letter = str(turn.get("speaker") or "").strip()
     if letter:
         speaker, label = f"Speaker {letter}", letter
@@ -318,8 +327,13 @@ def _post_with_retry(
     on_attempt=None,
     audio_bytes: int | None = None,
     audio_ms: int | None = None,
-) -> requests.Response:
-    """POST with 429 retries; every attempt is reported via on_attempt."""
+) -> tuple[requests.Response, float]:
+    """POST with 429 retries; report transport attempts via on_attempt.
+
+    Retries, timeouts, and connection failures are reported here. The
+    final response is returned unreported with its latency: the caller
+    validates it first, then reports success only for a usable result.
+    """
     for attempt in range(MAX_RETRIES + 1):
         started = time.monotonic()
         try:
@@ -355,12 +369,7 @@ def _post_with_retry(
             )
             time.sleep(_retry_delay_seconds(response, attempt))
             continue
-        _notify_attempt(
-            on_attempt, response, status < 400,
-            None if status < 400 else f"HTTP_{status}",
-            latency_ms, audio_bytes, audio_ms,
-        )
-        return response
+        return response, latency_ms
     raise TranscriptionError("transcription retry loop exhausted")  # unreachable
 
 
@@ -401,21 +410,41 @@ def transcribe_audio_file(
             "request": (None, json.dumps(payload), "application/json"),
             "audio": (wav_path.name, wav_bytes, "audio/wav"),
         }
-        response = _post_with_retry(
+        response, latency_ms = _post_with_retry(
             url, headers, files,
             on_attempt=on_attempt,
             audio_bytes=len(wav_bytes),
             audio_ms=audio_ms,
         )
 
+    def _report_final(ok: bool, error_code: str | None) -> None:
+        _notify_attempt(
+            on_attempt, response, ok, error_code,
+            latency_ms, len(wav_bytes), audio_ms,
+        )
+
     if response.status_code >= 400:
+        _report_final(False, f"HTTP_{response.status_code}")
         raise TranscriptionError(_format_http_error(response))
     try:
         response_payload = response.json()
     except ValueError as exc:
-        raise TranscriptionError("transcription response is not valid JSON") from exc
-
-    segments, warning = parse_transcription_response(response_payload)
+        _report_final(False, "PARSE_ERROR")
+        body = response.text or ""
+        hint = (
+            " (HTML page, not an API response: check META_API_BASE)"
+            if is_html_body(body, "")
+            else ""
+        )
+        raise TranscriptionError(
+            "transcription response is not valid JSON" + hint
+        ) from exc
+    try:
+        segments, warning = parse_transcription_response(response_payload)
+    except TranscriptionError:
+        _report_final(False, "INVALID_RESPONSE")
+        raise
+    _report_final(True, None)
     return {
         "model": config.META_VOICE_MODEL,
         "status": "real",

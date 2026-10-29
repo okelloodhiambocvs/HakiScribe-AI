@@ -256,9 +256,14 @@ def _mock_review(segments: list[dict]) -> tuple[list[dict], int]:
 
 
 def _spark_attempt_recorder(recording_id: int, db_path, model: str, style: str):
-    """Build the Spark client's per-attempt callback (persists via repo)."""
+    """Build the Spark client's per-attempt callback (persists via repo).
+
+    The callback keeps its latest row id as `last_id` so a reply that
+    fails flags-JSON validation can correct its own row instead of
+    leaving a success claim for an unusable result.
+    """
     def record(info: dict) -> None:
-        api_calls_repo.create_api_call(
+        record.last_id = api_calls_repo.create_api_call(
             provider="meta",
             model=model,
             endpoint_path=spark_client.STYLE_PATHS[style],
@@ -274,6 +279,7 @@ def _spark_attempt_recorder(recording_id: int, db_path, model: str, style: str):
             db_path=db_path,
         )
 
+    record.last_id = None
     return record
 
 
@@ -309,7 +315,18 @@ def run_review(
                 on_attempt=recorder,
             )
             raws.append(reply["raw"])
-            batch_valid, batch_dropped = parse_and_validate(reply["text"], by_idx)
+            try:
+                batch_valid, batch_dropped = parse_and_validate(
+                    reply["text"], by_idx
+                )
+            except SparkError:
+                api_calls_repo.update_api_call_outcome(
+                    recorder.last_id,
+                    False,
+                    "INVALID_RESPONSE",
+                    db_path=db_path,
+                )
+                raise
             valid.extend(batch_valid)
             dropped += batch_dropped
         raw_json = json.dumps(raws, ensure_ascii=False)

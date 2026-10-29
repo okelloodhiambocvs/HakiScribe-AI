@@ -256,6 +256,7 @@ async def _session_coro(
         "db_path": db_path,
         "error_code": None,
         "connected": False,
+        "completed": False,
         "outcome": None,
     }
     with _LOCK:
@@ -306,6 +307,7 @@ async def _session_coro(
                 getattr(exc, "error_code", None) or "SESSION_ERROR"
             )
         else:
+            context["completed"] = bool(summary.get("completed"))
             with _LOCK:
                 if _STATE.note is None:
                     if stop_event.is_set():
@@ -453,6 +455,7 @@ def _finalize(context) -> None:
         reviewer = context["reviewer"]
         db_path = context["db_path"]
         connected = context["connected"]
+        completed = context["completed"]
         error_code = context["error_code"]
         latency_ms = _STATE.handshake_latency_ms
         server_session_id = _STATE.server_session_id
@@ -506,7 +509,7 @@ def _finalize(context) -> None:
             mode="DIARIZATION",
             recording_id=recording_id,
             http_status=101 if connected else None,
-            ok=bool(connected and error_code is None),
+            ok=bool(completed and error_code is None),
             latency_ms=latency_ms,
             audio_bytes=audio_bytes,
             audio_ms=int(audio_bytes / (BYTES_PER_SECOND / 1000)),

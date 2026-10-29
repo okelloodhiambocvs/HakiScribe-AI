@@ -914,6 +914,34 @@ def test_stop_marks_session_stopped(monkeypatch, tmp_path):
         assert state["status"] == "ended"
         assert state["note"] == "Stopped."
         assert state["recording_id"] is not None
+        calls = api_calls_repo.list_recent_api_calls(
+            limit=5, db_path=kwargs["db_path"]
+        )
+        assert calls and calls[0]["endpoint_path"] == "/asr/realtime"
+        assert calls[0]["http_status"] == 101
+        assert calls[0]["ok"] == 0
+        assert calls[0]["error_code"] is None
     finally:
         live_session_service.stop_live_session()
         stop_server()
+
+
+def test_handshake_failure_records_failed_attempt(monkeypatch, tmp_path):
+    port = _free_port()
+    kwargs = _start_kwargs(
+        monkeypatch, tmp_path, f"ws://127.0.0.1:{port}"
+    )
+    try:
+        live_session_service.start_live_session("Reviewer Amina", True, **kwargs)
+        state = _wait_for(lambda s: s["status"] in ("ended", "error"))
+        assert state["status"] == "error"
+        assert "connection failed" in state["last_error"]
+    finally:
+        live_session_service.stop_live_session()
+    calls = api_calls_repo.list_recent_api_calls(
+        limit=5, db_path=kwargs["db_path"]
+    )
+    assert calls and calls[0]["endpoint_path"] == "/asr/realtime"
+    assert calls[0]["http_status"] is None
+    assert calls[0]["ok"] == 0
+    assert calls[0]["error_code"] == "CONNECTION_ERROR"

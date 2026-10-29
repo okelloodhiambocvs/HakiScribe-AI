@@ -192,11 +192,12 @@ def test_evidence_output_has_no_key_or_full_transcript(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert fake_key not in text
     assert long_transcript not in text
-    assert long_transcript[:100] in text
+    assert long_transcript[:100] not in text
+    assert "excerpt" not in text.lower()
     assert "429 responses: 1" in text
     assert "timeouts: 1" in text
     assert "12345678-90ab-cdef-1234-567890abcdef" not in text
-    assert "12345678…" in text
+    assert "12345678" not in text
     assert "/asr/transcribe" in text
 
 

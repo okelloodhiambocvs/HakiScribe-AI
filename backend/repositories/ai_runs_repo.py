@@ -71,6 +71,21 @@ def get_latest_ai_run(
     return runs[0] if runs else None
 
 
+def count_ai_runs_by_mode(
+    mode: str, db_path: str | Path | None = None
+) -> int:
+    """Count review runs in one mode ('real' or 'mock')."""
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM ai_runs WHERE mode = ?", (mode,)
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
 def list_recent_ai_runs(
     limit: int = 10, db_path: str | Path | None = None
 ) -> list[dict]:

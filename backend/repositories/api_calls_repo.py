@@ -56,6 +56,34 @@ def create_api_call(
         conn.close()
 
 
+def update_api_call_outcome(
+    call_id: int | None,
+    ok: bool,
+    error_code: str | None,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Correct one attempt row after downstream validation fails.
+
+    Used when a response that looked usable at the HTTP layer turns
+    out to be unusable (e.g. reply text that is not valid review
+    JSON). Returns False when call_id is None or unknown; never raises
+    for a missing row, since logging must not break the operation.
+    """
+    if call_id is None:
+        return False
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE api_calls SET ok = ?, error_code = ? WHERE id = ?",
+            (int(ok), error_code, call_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def list_recent_api_calls(
     limit: int = 10, db_path: str | Path | None = None
 ) -> list[dict]:

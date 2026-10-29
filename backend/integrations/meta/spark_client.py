@@ -217,8 +217,13 @@ def _is_retryable(status: int) -> bool:
 
 def _post_with_retry(
     url: str, headers: dict, body: dict, on_attempt=None
-) -> requests.Response:
-    """POST JSON with 429/5xx retries; every attempt reported via on_attempt."""
+) -> tuple[requests.Response, float]:
+    """POST JSON with 429/5xx retries; report transport attempts only.
+
+    Retries, timeouts, and connection failures are reported here. The
+    final response is returned unreported with its latency: the caller
+    validates it first, then reports success only for a usable result.
+    """
     for attempt in range(SPARK_MAX_RETRIES + 1):
         started = time.monotonic()
         try:
@@ -254,12 +259,7 @@ def _post_with_retry(
             )
             time.sleep(_retry_delay_seconds(response, attempt))
             continue
-        _notify_attempt(
-            on_attempt, response, status < 400,
-            None if status < 400 else f"HTTP_{status}",
-            latency_ms,
-        )
-        return response
+        return response, latency_ms
     raise SparkError("spark retry loop exhausted")  # unreachable
 
 
@@ -285,18 +285,36 @@ def complete(
     body = build_request_body(
         resolved_style, resolved_model, system, user, max_tokens
     )
-    response = _post_with_retry(url, headers, body, on_attempt)
+    response, latency_ms = _post_with_retry(url, headers, body, on_attempt)
+
+    def _report_final(ok: bool, error_code: str | None) -> None:
+        _notify_attempt(on_attempt, response, ok, error_code, latency_ms)
+
     if response.status_code >= 400:
+        _report_final(False, f"HTTP_{response.status_code}")
         raise SparkError(_format_spark_error(response))
     try:
         raw = response.json()
     except ValueError as exc:
-        raise SparkError("Spark response is not valid JSON") from exc
+        _report_final(False, "PARSE_ERROR")
+        body = response.text or ""
+        hint = (
+            " (HTML page, not an API response: check META_API_BASE)"
+            if is_html_body(body, "")
+            else ""
+        )
+        raise SparkError("Spark response is not valid JSON" + hint) from exc
+    try:
+        text = extract_reply_text(resolved_style, raw)
+    except SparkError:
+        _report_final(False, "INVALID_RESPONSE")
+        raise
+    _report_final(True, None)
     return {
         "model": resolved_model,
         "style": resolved_style,
         "url": url,
         "http_status": response.status_code,
-        "text": extract_reply_text(resolved_style, raw),
+        "text": text,
         "raw": raw,
     }

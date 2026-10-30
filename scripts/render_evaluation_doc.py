@@ -8,6 +8,7 @@ results say "Not yet measured". Works when no run exists yet.
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -36,11 +37,16 @@ def _settings_line(results: dict | None) -> str:
         return "No evaluation run yet."
     bias = results.get("language_bias") or []
     bias_text = ", ".join(bias) if bias else "none"
-    return (
+    line = (
         f"Run {results.get('run_at')} · model {results.get('model')} · "
         f"mode {results.get('mode')} · language bias: {bias_text} · "
         f"keyword terms: {results.get('keyword_count')}"
     )
+    if results.get("manifest_version") is not None:
+        line += f" · manifest v{results['manifest_version']}"
+    if results.get("transcription_source"):
+        line += f" · transcription source: {results['transcription_source']}"
+    return line
 
 
 def _category_entry(results: dict | None, key: str) -> dict:
@@ -58,6 +64,22 @@ def _number(value) -> str:
     return repr(value)
 
 
+def _measured_number(entry: dict, key: str) -> str:
+    """Stored number as repr; missing/null/invalid reads as not measured.
+
+    Booleans, non-numeric values, and non-finite floats (NaN and both
+    infinities) are all rejected.
+    """
+    value = entry.get(key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        return NOT_MEASURED
+    return repr(value)
+
+
 def render_evaluation_markdown(results: dict | None) -> str:
     """Build docs/EVALUATION.md from the results file only."""
     lines = [
@@ -70,37 +92,51 @@ def render_evaluation_markdown(results: dict | None) -> str:
         "",
         "## Per-category results",
         "",
-        "Mean of per-clip rates; lower is better, a perfect transcript "
+        "Mean of per-clip rates, and pooled rates over all reference "
+        "words or characters; lower is better, a perfect transcript "
         "scores zero.",
         "",
-        "| Category | Clips | Mean WER | Mean CER | Reference words |",
-        "| --- | --- | --- | --- | --- |",
+        "| Category | Clips | Mean WER | Mean CER | Pooled WER | "
+        "Pooled CER | Reference words |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for key, label in CATEGORIES:
         entry = _category_entry(results, key)
         if entry:
             lines.append(
                 f"| {label} | {entry['clips']} | {_number(entry['wer'])} "
-                f"| {_number(entry['cer'])} | {entry['ref_words']} |"
+                f"| {_number(entry['cer'])} "
+                f"| {_measured_number(entry, 'pooled_wer')} "
+                f"| {_measured_number(entry, 'pooled_cer')} "
+                f"| {entry['ref_words']} |"
             )
         else:
-            lines.append(f"| {label} | 0 | {NOT_MEASURED} | {NOT_MEASURED} | 0 |")
+            lines.append(
+                f"| {label} | 0 | {NOT_MEASURED} | {NOT_MEASURED} | "
+                f"{NOT_MEASURED} | {NOT_MEASURED} | 0 |"
+            )
     lines += [
         "",
         "## Per-clip results",
         "",
-        "| Clip | Category | WER | CER | Reference words |",
-        "| --- | --- | --- | --- | --- |",
+        "| Clip | Category | WER | CER | Reference words | Word edits | Character edits | Reference characters |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     clips = (results or {}).get("clips") or []
     if clips:
         for clip in clips:
             lines.append(
                 f"| {clip['id']} | {clip['category']} | {_number(clip['wer'])} "
-                f"| {_number(clip['cer'])} | {clip['ref_words']} |"
+                f"| {_number(clip['cer'])} | {clip['ref_words']} "
+                f"| {_measured_number(clip, 'word_edits')} "
+                f"| {_measured_number(clip, 'char_edits')} "
+                f"| {_measured_number(clip, 'ref_chars')} |"
             )
     else:
-        lines.append(f"| _none_ | — | {NOT_MEASURED} | {NOT_MEASURED} | 0 |")
+        lines.append(
+            f"| _none_ | — | {NOT_MEASURED} | {NOT_MEASURED} | 0 | "
+            f"{NOT_MEASURED} | {NOT_MEASURED} | {NOT_MEASURED} |"
+        )
     lines += [
         "",
         "## Method",
@@ -111,7 +147,18 @@ def render_evaluation_markdown(results: dict | None) -> str:
         "- WER and CER use `evaluation_service` normalisation: Unicode "
         "NFC, lower-case, punctuation stripped, whitespace collapsed, "
         "diacritics preserved, no translation.",
-        "- Category means are arithmetic means of the per-clip rates.",
+        "- Category means are arithmetic means of the per-clip rates: "
+        "every clip carries equal weight.",
+        "- Pooled WER is total word edits divided by total reference "
+        "words; pooled CER is total character edits divided by total "
+        "reference characters, including spaces. Mean metrics give "
+        "every clip equal weight, while pooled metrics weight clips "
+        "according to their reference length, so the two can differ "
+        "when clip lengths vary. Neither method is universally "
+        "better; they answer different evaluation questions.",
+        "- The transcription source names the selected code path "
+        "(`provider_integration` or `injected`); it is not proof that "
+        "an external provider request succeeded.",
         "- Regenerate with `python scripts/evaluate_asr.py` then "
         "`python scripts/render_evaluation_doc.py`.",
     ]
@@ -141,7 +188,8 @@ def render_limitations_markdown(results: dict | None) -> str:
             lines.append(
                 f"- {label}: mean WER {_number(entry['wer'])} over "
                 f"{entry['clips']} clips ({entry['ref_words']} reference "
-                "words)."
+                f"words); pooled WER "
+                f"{_measured_number(entry, 'pooled_wer')}."
             )
         else:
             lines.append(f"- {label}: {NOT_MEASURED} on Kenyan speech.")

@@ -33,6 +33,9 @@ _FIXTURE_RESULTS = {
             "cer": 0.02,
             "ref_words": 40,
             "hyp_words": 40,
+            "word_edits": 4,
+            "char_edits": 4,
+            "ref_chars": 200,
             "hypothesis": "court is now in session",
         },
         {
@@ -42,6 +45,9 @@ _FIXTURE_RESULTS = {
             "cer": 0.05,
             "ref_words": 50,
             "hyp_words": 51,
+            "word_edits": 10,
+            "char_edits": 12,
+            "ref_chars": 240,
             "hypothesis": "court is now in session",
         },
         {
@@ -49,15 +55,39 @@ _FIXTURE_RESULTS = {
             "category": "kiswahili",
             "wer": 0.35,
             "cer": 0.12,
-            "ref_words": 30,
-            "hyp_words": 29,
+            "ref_words": 40,
+            "hyp_words": 39,
+            "word_edits": 14,
+            "char_edits": 30,
+            "ref_chars": 250,
             "hypothesis": "mahakama imeahirishwa",
         },
     ],
     "categories": {
-        "english": {"clips": 2, "wer": 0.15, "cer": 0.035, "ref_words": 90},
-        "kiswahili": {"clips": 1, "wer": 0.35, "cer": 0.12, "ref_words": 30},
-        "code_switched": {"clips": 0, "wer": None, "cer": None, "ref_words": 0},
+        "english": {
+            "clips": 2,
+            "wer": 0.15,
+            "cer": 0.035,
+            "ref_words": 90,
+            "pooled_wer": 0.1556,
+            "pooled_cer": 0.0364,
+        },
+        "kiswahili": {
+            "clips": 1,
+            "wer": 0.35,
+            "cer": 0.12,
+            "ref_words": 40,
+            "pooled_wer": 0.35,
+            "pooled_cer": 0.12,
+        },
+        "code_switched": {
+            "clips": 0,
+            "wer": None,
+            "cer": None,
+            "ref_words": 0,
+            "pooled_wer": None,
+            "pooled_cer": None,
+        },
     },
 }
 
@@ -239,6 +269,183 @@ def test_render_without_results_says_not_measured(tmp_path):
     )
     assert "Not yet measured" in eval_doc.read_text(encoding="utf-8")
     assert "No evaluation run yet" in limits_doc.read_text(encoding="utf-8")
+
+
+def _render_texts(render, results, tmp_path):
+    """Render a results dict to both docs; return (eval, limits) text."""
+    results_path = tmp_path / "latest.json"
+    results_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    eval_doc = tmp_path / "EVALUATION.md"
+    limits_doc = tmp_path / "LANGUAGE-LIMITATIONS.md"
+    assert (
+        render.main(
+            [
+                "render_evaluation_doc.py",
+                "--results",
+                str(results_path),
+                "--eval-doc",
+                str(eval_doc),
+                "--limits-doc",
+                str(limits_doc),
+            ]
+        )
+        == 0
+    )
+    return (
+        eval_doc.read_text(encoding="utf-8"),
+        limits_doc.read_text(encoding="utf-8"),
+    )
+
+
+def _fixture_copy():
+    """Deep copy of the shared fixture via a JSON round trip."""
+    return json.loads(json.dumps(_FIXTURE_RESULTS))
+
+
+def test_render_shows_pooled_metrics(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    eval_text, limits_text = _render_texts(
+        render, _fixture_copy(), tmp_path
+    )
+    assert "Pooled WER" in eval_text
+    assert "Pooled CER" in eval_text
+    assert "0.1556" in eval_text
+    assert "0.0364" in eval_text
+    assert "pooled WER 0.1556" in limits_text
+    assert "mean WER 0.15" in limits_text
+
+
+def test_render_null_pooled_says_not_measured(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    results = _fixture_copy()
+    results["categories"]["english"]["pooled_wer"] = None
+    results["categories"]["english"]["pooled_cer"] = None
+    eval_text, _ = _render_texts(render, results, tmp_path)
+    english_row = next(
+        line for line in eval_text.splitlines() if line.startswith("| English |")
+    )
+    assert "0.15" in english_row
+    assert "Not yet measured" in english_row
+    assert "None" not in eval_text
+
+
+def test_render_old_schema_without_pooled_keys(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    results = _fixture_copy()
+    for entry in results["categories"].values():
+        entry.pop("pooled_wer", None)
+        entry.pop("pooled_cer", None)
+    for clip in results["clips"]:
+        clip.pop("word_edits", None)
+        clip.pop("char_edits", None)
+        clip.pop("ref_chars", None)
+    eval_text, _ = _render_texts(render, results, tmp_path)
+    assert "0.15" in eval_text
+    assert "Not yet measured" in eval_text
+    assert "None" not in eval_text
+
+
+def test_render_per_clip_edit_counts(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    eval_text, _ = _render_texts(render, _fixture_copy(), tmp_path)
+    assert (
+        "| en-1 | english | 0.1 | 0.02 | 40 | 4 | 4 | 200 |" in eval_text
+    )
+    assert "Word edits" in eval_text
+    assert "Reference characters" in eval_text
+
+
+def test_render_shows_provenance_safely(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    results = _fixture_copy()
+    results["manifest_version"] = 1
+    results["transcription_source"] = "injected"
+    eval_text, _ = _render_texts(render, results, tmp_path)
+    assert "manifest v1" in eval_text
+    assert "transcription source: injected" in eval_text
+    plain_text, _ = _render_texts(render, _fixture_copy(), tmp_path)
+    assert "None" not in plain_text
+
+
+def test_render_without_results_has_no_numbers(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    eval_doc = tmp_path / "EVALUATION.md"
+    limits_doc = tmp_path / "LANGUAGE-LIMITATIONS.md"
+    assert (
+        render.main(
+            [
+                "render_evaluation_doc.py",
+                "--results",
+                str(tmp_path / "nope.json"),
+                "--eval-doc",
+                str(eval_doc),
+                "--limits-doc",
+                str(limits_doc),
+            ]
+        )
+        == 0
+    )
+    combined = eval_doc.read_text(encoding="utf-8") + limits_doc.read_text(
+        encoding="utf-8"
+    )
+    assert re.findall(r"\d+\.\d+", combined) == []
+    assert "Not yet measured" in combined
+
+
+_PER_CLIP_HEADER = (
+    "| Clip | Category | WER | CER | Reference words | Word edits | "
+    "Character edits | Reference characters |"
+)
+_PER_CLIP_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- |"
+
+
+def test_per_clip_header_and_separator_present(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    eval_text, _ = _render_texts(render, _fixture_copy(), tmp_path)
+    assert _PER_CLIP_HEADER in eval_text
+    assert _PER_CLIP_SEPARATOR in eval_text
+    assert _PER_CLIP_HEADER.count("|") == _PER_CLIP_SEPARATOR.count("|")
+    empty_doc = tmp_path / "EMPTY.md"
+    limits_doc = tmp_path / "LIMITS.md"
+    assert (
+        render.main(
+            [
+                "render_evaluation_doc.py",
+                "--results",
+                str(tmp_path / "nope.json"),
+                "--eval-doc",
+                str(empty_doc),
+                "--limits-doc",
+                str(limits_doc),
+            ]
+        )
+        == 0
+    )
+    empty_text = empty_doc.read_text(encoding="utf-8")
+    assert _PER_CLIP_HEADER in empty_text
+    assert _PER_CLIP_SEPARATOR in empty_text
+
+
+def test_non_finite_values_render_as_not_measured(tmp_path):
+    render = _load_script("render_evaluation_doc")
+    results = _fixture_copy()
+    results["categories"]["english"]["pooled_wer"] = float("nan")
+    results["categories"]["english"]["pooled_cer"] = float("inf")
+    results["categories"]["kiswahili"]["pooled_wer"] = float("-inf")
+    results["clips"][0]["word_edits"] = float("nan")
+    eval_text, _ = _render_texts(render, results, tmp_path)
+    english_row = next(
+        line for line in eval_text.splitlines() if line.startswith("| English |")
+    )
+    assert "0.15" in english_row
+    assert english_row.count("Not yet measured") == 2
+    clip_row = next(
+        line for line in eval_text.splitlines() if line.startswith("| en-1 |")
+    )
+    assert "Not yet measured" in clip_row
+    lowered = eval_text.lower()
+    assert "nan" not in lowered
+    assert "inf" not in lowered
 
 
 def test_evaluate_fake_backend_category_averages(tmp_path):

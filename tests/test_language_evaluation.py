@@ -11,6 +11,8 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from backend.core import config
+from backend.integrations.meta.voice_transcribe import TranscriptionError
+from backend.repositories import api_calls_repo
 from backend.services import evaluation_service, review_prompt
 from frontend.components import language_notes
 
@@ -487,8 +489,9 @@ def test_default_path_reports_provider_integration(tmp_path, monkeypatch):
     manifest = _write_provenance_fixture(tmp_path / "eval")
     calls = []
 
-    def fake_integration(audio_path):
+    def fake_integration(audio_path, on_attempt=None):
         calls.append(audio_path)
+        assert callable(on_attempt)
         return {
             "segments": [{"idx": 0, "text_original": "court is now in session"}]
         }
@@ -502,3 +505,278 @@ def test_default_path_reports_provider_integration(tmp_path, monkeypatch):
     assert len(calls) == 2
     assert all(str(call).endswith(".wav") for call in calls)
     assert results["categories"]["english"]["wer"] == 0.0
+
+
+class _FakeEvalResponse:
+    """Minimal requests.post stand-in (no network)."""
+
+    def __init__(self, status_code, payload=None, headers=None, body=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = headers or {}
+        self.text = body
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no JSON here")
+        return self._payload
+
+
+_VALID_DIARIZATION = {
+    "sessionId": "eval-session",
+    "transcript": "court is now in session",
+    "audioDurationMs": 4000,
+    "turns": [
+        {
+            "turnId": 0,
+            "startMs": 0,
+            "endMs": 4000,
+            "transcript": "court is now in session",
+            "speaker": "A",
+        }
+    ],
+}
+
+
+def _write_single_clip_fixture(
+    base: Path,
+    audio_bytes=b"RIFFsingle-clip-audio",
+    ref_text="court is now in session",
+):
+    """One-clip eval fixture; manifest path."""
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    (base / "audio" / "s1.wav").write_bytes(audio_bytes)
+    (base / "reference" / "s1.txt").write_text(ref_text, encoding="utf-8")
+    manifest = {
+        "version": 1,
+        "clips": [
+            {
+                "id": "s1",
+                "category": "english",
+                "audio": "audio/s1.wav",
+                "reference": "reference/s1.txt",
+            }
+        ],
+    }
+    path = base / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+def _passthrough_wav(src, dst):
+    """prepare_wav stand-in: copy bytes without audio tooling."""
+    data = Path(src).read_bytes()
+    Path(dst).write_bytes(data)
+    return Path(dst)
+
+
+def _patch_provider_path(monkeypatch, evaluate, post):
+    """Fake HTTP + configured key + no-op WAV prep (no network)."""
+    monkeypatch.setattr(
+        "backend.integrations.meta.voice_transcribe.requests.post", post
+    )
+    monkeypatch.setattr(
+        evaluate.voice_transcribe.config, "is_configured", lambda: True
+    )
+    monkeypatch.setattr(
+        evaluate.voice_transcribe, "prepare_wav", _passthrough_wav
+    )
+
+
+def _ledger_rows(db_path):
+    """All api_calls rows, oldest first."""
+    rows = api_calls_repo.list_recent_api_calls(limit=500, db_path=db_path)
+    return sorted(rows, key=lambda row: row["id"])
+
+
+def test_injected_transcription_creates_no_ledger_rows(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+    results = evaluate.run_evaluation(
+        manifest, transcribe_fn=_exact_transcribe, db_path=db_path
+    )
+    assert results["transcription_source"] == "injected"
+    assert results["manifest_version"] == 1
+    assert results["counts"] == {"clips": 2}
+    assert results["categories"]["english"]["wer"] == 0.0
+    for clip in results["clips"]:
+        assert len(clip["audio_sha256"]) == 64
+    assert _ledger_rows(db_path) == []
+
+
+def test_default_path_records_successful_attempt(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(200, dict(_VALID_DIARIZATION))
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    results = evaluate.run_evaluation(manifest, db_path=db_path)
+    assert results["transcription_source"] == "provider_integration"
+    assert results["categories"]["english"]["wer"] == 0.0
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["provider"] == "meta"
+    assert row["model"] == config.META_VOICE_MODEL
+    assert row["endpoint_path"] == "/asr/transcribe"
+    assert row["mode"] == config.get_voice_mode()
+    assert row["http_status"] == 200
+    assert row["ok"] == 1
+    assert row["recording_id"] is None
+    assert row["error_code"] is None
+    assert row["audio_bytes"] == len(b"RIFFsingle-clip-audio")
+
+
+def test_retry_then_success_records_two_rows(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+    planned = [
+        _FakeEvalResponse(429, headers={"Retry-After": "0"}),
+        _FakeEvalResponse(200, dict(_VALID_DIARIZATION)),
+    ]
+
+    def post(url, headers=None, files=None, timeout=None):
+        return planned.pop(0)
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    evaluate.run_evaluation(manifest, db_path=db_path)
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 2
+    assert rows[0]["http_status"] == 429
+    assert rows[0]["ok"] == 0
+    assert rows[0]["error_code"] == "HTTP_429"
+    assert rows[1]["http_status"] == 200
+    assert rows[1]["ok"] == 1
+    assert rows[1]["error_code"] is None
+
+
+def test_http_400_records_failure_and_raises(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(400, body='{"error": "bad request"}')
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    with pytest.raises(TranscriptionError):
+        evaluate.run_evaluation(manifest, db_path=db_path)
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 1
+    assert rows[0]["http_status"] == 400
+    assert rows[0]["ok"] == 0
+    assert rows[0]["error_code"] == "HTTP_400"
+
+
+def test_mock_mode_records_nothing(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+    monkeypatch.setattr(
+        evaluate.voice_transcribe.config, "is_configured", lambda: False
+    )
+    results = evaluate.run_evaluation(manifest, db_path=db_path)
+    assert results["transcription_source"] == "provider_integration"
+    assert results["counts"] == {"clips": 1}
+    assert _ledger_rows(db_path) == []
+
+
+def test_malformed_json_records_parse_error(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(200, body="not json{{{ skewed")
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    with pytest.raises(TranscriptionError, match="not valid JSON"):
+        evaluate.run_evaluation(manifest, db_path=db_path)
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 1
+    assert rows[0]["ok"] == 0
+    assert rows[0]["error_code"] == "PARSE_ERROR"
+
+
+def test_invalid_response_records_invalid_response(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(200, {"transcript": "", "turns": []})
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    with pytest.raises(TranscriptionError, match="no turns or transcript"):
+        evaluate.run_evaluation(manifest, db_path=db_path)
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 1
+    assert rows[0]["ok"] == 0
+    assert rows[0]["error_code"] == "INVALID_RESPONSE"
+
+
+def test_explicit_db_path_is_honored(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    used = tmp_path / "used.db"
+    untouched = tmp_path / "untouched.db"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(200, dict(_VALID_DIARIZATION))
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    evaluate.run_evaluation(manifest, db_path=used)
+    assert len(_ledger_rows(used)) == 1
+    assert not untouched.exists()
+
+
+def test_fake_key_absent_from_ledger(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_single_clip_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+    fake_key = "EVAL-FAKE-KEY-999"
+    monkeypatch.setattr(config, "META_API_KEY", fake_key)
+
+    def post(url, headers=None, files=None, timeout=None):
+        assert fake_key in headers.get("Authorization", "")
+        return _FakeEvalResponse(400, body=f"bad key {fake_key} rejected")
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    with pytest.raises(TranscriptionError):
+        evaluate.run_evaluation(manifest, db_path=db_path)
+    rows = _ledger_rows(db_path)
+    assert len(rows) == 1
+    assert fake_key not in json.dumps(rows)
+
+
+def test_main_db_path_wires_ledger(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_provenance_fixture(tmp_path / "eval")
+    db_path = tmp_path / "ledger.db"
+    out_dir = tmp_path / "results"
+
+    def post(url, headers=None, files=None, timeout=None):
+        return _FakeEvalResponse(200, dict(_VALID_DIARIZATION))
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    monkeypatch.setattr(evaluate, "is_configured", lambda: True)
+    code = evaluate.main(
+        [
+            "evaluate_asr.py",
+            "--manifest",
+            str(manifest),
+            "--results-dir",
+            str(out_dir),
+            "--db-path",
+            str(db_path),
+        ]
+    )
+    assert code == 0
+    assert (out_dir / "latest.json").is_file()
+    assert len(_ledger_rows(db_path)) == 2

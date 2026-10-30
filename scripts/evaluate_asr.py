@@ -23,6 +23,7 @@ if str(_REPO_ROOT) not in sys.path:
 from backend.core import config  # noqa: E402
 from backend.core.config import is_configured  # noqa: E402
 from backend.integrations.meta import voice_transcribe  # noqa: E402
+from backend.repositories import api_calls_repo  # noqa: E402
 from backend.services import evaluation_service  # noqa: E402
 
 CATEGORIES = ("english", "kiswahili", "code_switched")
@@ -71,6 +72,33 @@ def _sha256_of_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _attempt_recorder(db_path):
+    """Build the integration's per-attempt callback (persists via repo).
+
+    Mirrors the transcription service recorder; evaluation clips are
+    not recordings, so recording_id stays NULL.
+    """
+
+    def record(info: dict) -> None:
+        api_calls_repo.create_api_call(
+            provider="meta",
+            model=config.META_VOICE_MODEL,
+            endpoint_path=voice_transcribe.ENDPOINT_PATH,
+            mode=config.get_voice_mode(),
+            recording_id=None,
+            http_status=info.get("http_status"),
+            ok=bool(info.get("ok")),
+            latency_ms=info.get("latency_ms"),
+            audio_bytes=info.get("audio_bytes"),
+            audio_ms=info.get("audio_ms"),
+            request_id=info.get("request_id"),
+            error_code=info.get("error_code"),
+            db_path=db_path,
+        )
+
+    return record
+
+
 def _validate_clip(entry: object) -> dict:
     """Check one manifest entry has id, category, audio, reference."""
     if not isinstance(entry, dict):
@@ -86,7 +114,9 @@ def _validate_clip(entry: object) -> dict:
     return entry
 
 
-def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
+def run_evaluation(
+    manifest_path, *, transcribe_fn=None, db_path=None
+) -> dict:
     """Transcribe and score every clip; return the results document.
 
     transcribe_fn(audio_path) defaults to the real batch code path and
@@ -94,7 +124,10 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
     FileNotFoundError for missing clip files (never partial results)
     and ValueError for a missing, invalid, or unsupported manifest
     version. transcription_source names the selected code path only;
-    it is not proof of an external provider request.
+    it is not proof of an external provider request. On the default
+    path, provider attempts are recorded in the api_calls ledger via
+    the integration callback (recording_id NULL); injected functions
+    and mock mode record nothing.
     """
     manifest_path = Path(manifest_path)
     base = manifest_path.parent
@@ -104,9 +137,11 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
     if transcribe_fn is None:
         transcribe = voice_transcribe.transcribe_audio_file
         transcription_source = "provider_integration"
+        on_attempt = _attempt_recorder(db_path)
     else:
         transcribe = transcribe_fn
         transcription_source = "injected"
+        on_attempt = None
     scored = []
     for clip in clips:
         audio_path = base / clip["audio"]
@@ -121,7 +156,10 @@ def run_evaluation(manifest_path, *, transcribe_fn=None) -> dict:
             )
         reference = ref_path.read_text(encoding="utf-8").strip()
         audio_sha256 = _sha256_of_file(audio_path)
-        result = transcribe(str(audio_path))
+        if on_attempt is None:
+            result = transcribe(str(audio_path))
+        else:
+            result = transcribe(str(audio_path), on_attempt=on_attempt)
         segments = sorted(
             result.get("segments", []), key=lambda item: item.get("idx", 0)
         )
@@ -207,6 +245,12 @@ def main(argv: list[str]) -> int:
         help="Comma-separated languageBias override for this run "
         "(default: the configured value).",
     )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="API-call ledger database (default: the application's "
+        "normal database resolution).",
+    )
     args = parser.parse_args(argv[1:])
     if args.language_bias is not None:
         config.META_LANGUAGE_BIAS = args.language_bias
@@ -214,7 +258,7 @@ def main(argv: list[str]) -> int:
         print("error: META_API_KEY is not set; refusing to invent results")
         return 1
     try:
-        results = run_evaluation(args.manifest)
+        results = run_evaluation(args.manifest, db_path=args.db_path)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}")
         return 1

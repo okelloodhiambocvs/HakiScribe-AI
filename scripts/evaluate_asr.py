@@ -114,6 +114,52 @@ def _validate_clip(entry: object) -> dict:
     return entry
 
 
+def _prevalidate_clips(clips: list, base: Path) -> list[dict]:
+    """Validate every clip before any transcription call.
+
+    Rejects empty clip lists, malformed entries, duplicate ids, bad
+    categories, missing/unreadable files, and references with no
+    usable normalized text. Raises FileNotFoundError for missing
+    files and ValueError otherwise.
+    """
+    if not clips:
+        raise ValueError("manifest contains no clips")
+    validated = [_validate_clip(entry) for entry in clips]
+    seen: set = set()
+    for clip in validated:
+        if clip["id"] in seen:
+            raise ValueError(f"clip {clip['id']!r}: duplicate clip id")
+        seen.add(clip["id"])
+        audio_path = base / clip["audio"]
+        ref_path = base / clip["reference"]
+        if not audio_path.is_file():
+            raise FileNotFoundError(
+                f"clip {clip['id']!r}: audio file missing: {audio_path}"
+            )
+        try:
+            with open(audio_path, "rb") as handle:
+                handle.read(1)
+        except OSError as exc:
+            raise ValueError(
+                f"clip {clip['id']!r}: audio file unreadable: {audio_path}"
+            ) from exc
+        if not ref_path.is_file():
+            raise FileNotFoundError(
+                f"clip {clip['id']!r}: reference file missing: {ref_path}"
+            )
+        try:
+            ref_text = ref_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(
+                f"clip {clip['id']!r}: reference file unreadable: {ref_path}"
+            ) from exc
+        if not evaluation_service.normalize_text(ref_text):
+            raise ValueError(
+                f"clip {clip['id']!r}: reference has no usable text: {ref_path}"
+            )
+    return validated
+
+
 def run_evaluation(
     manifest_path, *, transcribe_fn=None, db_path=None
 ) -> dict:
@@ -133,7 +179,7 @@ def run_evaluation(
     base = manifest_path.parent
     manifest = _load_manifest(manifest_path)
     version = _manifest_version(manifest, manifest_path)
-    clips = [_validate_clip(entry) for entry in manifest["clips"]]
+    clips = _prevalidate_clips(manifest["clips"], base)
     if transcribe_fn is None:
         transcribe = voice_transcribe.transcribe_audio_file
         transcription_source = "provider_integration"
@@ -166,6 +212,12 @@ def run_evaluation(
         hypothesis = " ".join(
             item.get("text_original", "") for item in segments
         ).strip()
+        word_edits, ref_word_count = evaluation_service.wer_counts(
+            reference, hypothesis
+        )
+        char_edits, ref_char_count = evaluation_service.cer_counts(
+            reference, hypothesis
+        )
         scored.append(
             {
                 "id": clip["id"],
@@ -176,12 +228,13 @@ def run_evaluation(
                 "cer": round(
                     evaluation_service.cer(reference, hypothesis), 4
                 ),
-                "ref_words": len(
-                    evaluation_service.normalize_text(reference).split()
-                ),
+                "ref_words": ref_word_count,
                 "hyp_words": len(
                     evaluation_service.normalize_text(hypothesis).split()
                 ),
+                "word_edits": word_edits,
+                "char_edits": char_edits,
+                "ref_chars": ref_char_count,
                 "audio_sha256": audio_sha256,
                 "hypothesis": hypothesis,
             }
@@ -195,6 +248,8 @@ def run_evaluation(
     for category in CATEGORIES:
         group = [item for item in scored if item["category"] == category]
         if group:
+            total_ref_words = sum(item["ref_words"] for item in group)
+            total_ref_chars = sum(item["ref_chars"] for item in group)
             categories[category] = {
                 "clips": len(group),
                 "wer": round(
@@ -203,7 +258,21 @@ def run_evaluation(
                 "cer": round(
                     sum(item["cer"] for item in group) / len(group), 4
                 ),
-                "ref_words": sum(item["ref_words"] for item in group),
+                "ref_words": total_ref_words,
+                "pooled_wer": round(
+                    sum(item["word_edits"] for item in group)
+                    / total_ref_words,
+                    4,
+                )
+                if total_ref_words
+                else None,
+                "pooled_cer": round(
+                    sum(item["char_edits"] for item in group)
+                    / total_ref_chars,
+                    4,
+                )
+                if total_ref_chars
+                else None,
             }
         else:
             categories[category] = {
@@ -211,6 +280,8 @@ def run_evaluation(
                 "wer": None,
                 "cer": None,
                 "ref_words": 0,
+                "pooled_wer": None,
+                "pooled_cer": None,
             }
     return {
         "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

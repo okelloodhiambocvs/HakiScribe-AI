@@ -94,26 +94,42 @@ def _edit_distance(ref_seq, hyp_seq) -> int:
     return previous[-1]
 
 
+def wer_counts(
+    reference: str | None, hypothesis: str | None
+) -> tuple[int, int]:
+    """Word edits and reference word count under shared normalisation."""
+    ref_tokens = normalize_text(reference).split()
+    hyp_tokens = normalize_text(hypothesis).split()
+    return _edit_distance(ref_tokens, hyp_tokens), len(ref_tokens)
+
+
+def cer_counts(
+    reference: str | None, hypothesis: str | None
+) -> tuple[int, int]:
+    """Character edits and reference char count (spaces included)."""
+    ref_chars = list(normalize_text(reference))
+    hyp_chars = list(normalize_text(hypothesis))
+    return _edit_distance(ref_chars, hyp_chars), len(ref_chars)
+
+
 def wer(reference: str | None, hypothesis: str | None) -> float:
     """Word error rate: word edits divided by reference word count.
 
     Empty reference with empty hypothesis scores 0.0; empty reference
     with any hypothesis scores 1.0. Insertions can push WER above 1.0.
     """
-    ref_tokens = normalize_text(reference).split()
-    hyp_tokens = normalize_text(hypothesis).split()
-    if not ref_tokens:
-        return 0.0 if not hyp_tokens else 1.0
-    return _edit_distance(ref_tokens, hyp_tokens) / len(ref_tokens)
+    distance, ref_len = wer_counts(reference, hypothesis)
+    if ref_len == 0:
+        return 0.0 if distance == 0 else 1.0
+    return distance / ref_len
 
 
 def cer(reference: str | None, hypothesis: str | None) -> float:
     """Character error rate (spaces included), same empty rules as WER."""
-    ref_chars = list(normalize_text(reference))
-    hyp_chars = list(normalize_text(hypothesis))
-    if not ref_chars:
-        return 0.0 if not hyp_chars else 1.0
-    return _edit_distance(ref_chars, hyp_chars) / len(ref_chars)
+    distance, ref_len = cer_counts(reference, hypothesis)
+    if ref_len == 0:
+        return 0.0 if distance == 0 else 1.0
+    return distance / ref_len
 
 
 def _envelope(

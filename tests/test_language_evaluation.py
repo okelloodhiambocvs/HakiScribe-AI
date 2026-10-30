@@ -780,3 +780,322 @@ def test_main_db_path_wires_ledger(tmp_path, monkeypatch):
     assert code == 0
     assert (out_dir / "latest.json").is_file()
     assert len(_ledger_rows(db_path)) == 2
+
+
+def test_wer_cer_counts_known_answers():
+    wer_counts = evaluation_service.wer_counts
+    cer_counts = evaluation_service.cer_counts
+    assert wer_counts("the accused was present", "the accused present") == (1, 4)
+    assert wer_counts("a b", "a b c d") == (2, 2)
+    assert wer_counts("", "") == (0, 0)
+    assert wer_counts("", "hello") == (1, 0)
+    assert wer_counts("Hello, World!", "hello world") == (0, 2)
+    assert cer_counts("kitten", "sitting") == (3, 6)
+    assert cer_counts("a b", "a c") == (1, 3)
+    assert cer_counts("", "") == (0, 0)
+    assert cer_counts("", "abc") == (3, 0)
+    assert cer_counts("naïve café", "naive cafe") == (2, 10)
+
+
+def test_wer_cer_wrappers_match_counts():
+    cases = [
+        ("hello world", "hello world"),
+        ("the accused was present", "the accused present"),
+        ("a b c", "a x c"),
+        ("Hello, World!", "hello world"),
+        ("", ""),
+        ("", "hello"),
+        ("kitten", "sitting"),
+        ("naïve café", "naive cafe"),
+    ]
+    for ref, hyp in cases:
+        distance, ref_len = evaluation_service.wer_counts(ref, hyp)
+        expected = 0.0 if ref_len == 0 and distance == 0 else (
+            1.0 if ref_len == 0 else distance / ref_len
+        )
+        assert evaluation_service.wer(ref, hyp) == expected
+        distance, ref_len = evaluation_service.cer_counts(ref, hyp)
+        expected = 0.0 if ref_len == 0 and distance == 0 else (
+            1.0 if ref_len == 0 else distance / ref_len
+        )
+        assert evaluation_service.cer(ref, hyp) == expected
+
+
+def _write_custom_fixture(base: Path, specs, version=1):
+    """specs: [(clip_id, category, audio_bytes, ref_text)] → manifest."""
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    clips = []
+    for clip_id, category, audio_bytes, ref_text in specs:
+        (base / "audio" / f"{clip_id}.wav").write_bytes(audio_bytes)
+        (base / "reference" / f"{clip_id}.txt").write_text(
+            ref_text, encoding="utf-8"
+        )
+        clips.append(
+            {
+                "id": clip_id,
+                "category": category,
+                "audio": f"audio/{clip_id}.wav",
+                "reference": f"reference/{clip_id}.txt",
+            }
+        )
+    manifest = {"version": version, "clips": clips}
+    path = base / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+def test_pooled_metrics_differ_from_means_on_divergent_set(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    long_ref = "one two three four five six seven eight nine ten"
+    long_hyp = "one two three four five six seven eight nine tenx"
+    specs = [
+        ("long", "english", b"RIFFlong-audio", long_ref),
+        ("short", "english", b"RIFFshort-audio", "yes"),
+    ]
+    manifest = _write_custom_fixture(tmp_path / "eval", specs)
+    hyps = {"long": long_hyp, "short": "no"}
+
+    def fake_transcribe(audio_path):
+        return {
+            "segments": [
+                {"idx": 0, "text_original": hyps[Path(audio_path).stem]}
+            ]
+        }
+
+    results = evaluate.run_evaluation(manifest, transcribe_fn=fake_transcribe)
+    by_id = {clip["id"]: clip for clip in results["clips"]}
+    assert by_id["long"]["word_edits"] == 1
+    assert by_id["long"]["ref_words"] == 10
+    assert by_id["short"]["word_edits"] == 1
+    assert by_id["short"]["ref_words"] == 1
+    english = results["categories"]["english"]
+    assert english["wer"] == round((0.1 + 1.0) / 2, 4)
+    assert english["pooled_wer"] == round(2 / 11, 4)
+    assert english["pooled_wer"] != english["wer"]
+    expected_char_edits = sum(
+        evaluation_service.cer_counts(ref, hyps[clip_id])[0]
+        for clip_id, _, _, ref in specs
+    )
+    expected_ref_chars = sum(
+        evaluation_service.cer_counts(ref, hyps[clip_id])[1]
+        for clip_id, _, _, ref in specs
+    )
+    assert english["pooled_cer"] == round(
+        expected_char_edits / expected_ref_chars, 4
+    )
+    assert results["categories"]["code_switched"]["pooled_wer"] is None
+    assert results["categories"]["code_switched"]["pooled_cer"] is None
+
+
+def test_pooled_cer_counts_spaces_as_characters(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(
+        tmp_path / "eval", [("s1", "english", b"RIFFaudio", "a b")]
+    )
+
+    def fake_transcribe(audio_path):
+        return {"segments": [{"idx": 0, "text_original": "a c"}]}
+
+    results = evaluate.run_evaluation(manifest, transcribe_fn=fake_transcribe)
+    clip = results["clips"][0]
+    assert (clip["char_edits"], clip["ref_chars"]) == (1, 3)
+    assert results["categories"]["english"]["pooled_cer"] == round(1 / 3, 4)
+
+
+def test_empty_manifest_is_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(tmp_path / "eval", [])
+    with pytest.raises(ValueError, match="no clips"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+def test_duplicate_clip_ids_are_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    (base / "audio" / "dup.wav").write_bytes(b"RIFFdup")
+    (base / "reference" / "dup.txt").write_text("court is in session")
+    entry = {
+        "id": "dup",
+        "category": "english",
+        "audio": "audio/dup.wav",
+        "reference": "reference/dup.txt",
+    }
+    manifest = base / "manifest.json"
+    manifest.write_text(json.dumps({"version": 1, "clips": [entry, entry]}))
+    with pytest.raises(ValueError, match="duplicate clip id"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+@pytest.mark.parametrize("ref_text", ["", "   ", "\n\t  \n", "...", "?!"])
+def test_empty_references_are_rejected(tmp_path, ref_text):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(
+        tmp_path / "eval", [("s1", "english", b"RIFFaudio", ref_text)]
+    )
+    with pytest.raises(ValueError, match="no usable text"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+@pytest.mark.parametrize("ref_text", ["Ndiyo.", "a", "naïve café"])
+def test_short_references_are_accepted(tmp_path, ref_text):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(
+        tmp_path / "eval", [("s1", "kiswahili", b"RIFFaudio", ref_text)]
+    )
+
+    def fake_transcribe(audio_path):
+        return {"segments": [{"idx": 0, "text_original": ref_text}]}
+
+    results = evaluate.run_evaluation(manifest, transcribe_fn=fake_transcribe)
+    assert results["counts"] == {"clips": 1}
+    assert results["categories"]["kiswahili"]["wer"] == 0.0
+
+
+def test_missing_audio_file_is_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    (base / "reference" / "s1.txt").write_text("court is in session")
+    manifest = base / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clips": [
+                    {
+                        "id": "s1",
+                        "category": "english",
+                        "audio": "audio/gone.wav",
+                        "reference": "reference/s1.txt",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="audio file missing"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+def test_missing_reference_file_is_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    (base / "audio").mkdir(parents=True)
+    (base / "reference").mkdir()
+    (base / "audio" / "s1.wav").write_bytes(b"RIFFaudio")
+    manifest = base / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clips": [
+                    {
+                        "id": "s1",
+                        "category": "english",
+                        "audio": "audio/s1.wav",
+                        "reference": "reference/gone.txt",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="reference file missing"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+def test_directory_as_audio_is_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    (base / "audio" / "s1.wav").mkdir(parents=True)
+    (base / "reference").mkdir()
+    (base / "reference" / "s1.txt").write_text("court is in session")
+    manifest = base / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clips": [
+                    {
+                        "id": "s1",
+                        "category": "english",
+                        "audio": "audio/s1.wav",
+                        "reference": "reference/s1.txt",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="audio file missing"):
+        evaluate.run_evaluation(manifest, transcribe_fn=_exact_transcribe)
+
+
+def test_unreadable_audio_is_rejected(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    base = tmp_path / "eval"
+    manifest = _write_custom_fixture(
+        base, [("s1", "english", b"RIFFaudio", "court is in session")]
+    )
+    wav_path = base / "audio" / "s1.wav"
+    wav_path.chmod(0o000)
+    try:
+        try:
+            with open(wav_path, "rb"):
+                pass
+        except OSError:
+            pass
+        else:
+            pytest.skip("platform allows reading chmod-0 files")
+        with pytest.raises(ValueError, match="unreadable"):
+            evaluate.run_evaluation(
+                manifest, transcribe_fn=_exact_transcribe
+            )
+    finally:
+        wav_path.chmod(0o666)
+
+
+def test_later_invalid_clip_causes_zero_transcribe_calls(tmp_path):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(
+        tmp_path / "eval",
+        [
+            ("c1", "english", b"RIFFone", "court is in session"),
+            ("c2", "english", b"RIFFtwo", "we adjourn today"),
+        ],
+    )
+    (tmp_path / "eval" / "audio" / "c2.wav").unlink()
+    calls = []
+
+    def counting_transcribe(audio_path):
+        calls.append(audio_path)
+        return {"segments": [{"idx": 0, "text_original": "x"}]}
+
+    with pytest.raises(FileNotFoundError, match="c2"):
+        evaluate.run_evaluation(manifest, transcribe_fn=counting_transcribe)
+    assert calls == []
+
+
+def test_later_invalid_clip_records_no_ledger_rows(tmp_path, monkeypatch):
+    evaluate = _load_script("evaluate_asr")
+    manifest = _write_custom_fixture(
+        tmp_path / "eval",
+        [
+            ("c1", "english", b"RIFFone", "court is in session"),
+            ("c2", "english", b"RIFFtwo", "we adjourn today"),
+        ],
+    )
+    (tmp_path / "eval" / "audio" / "c2.wav").unlink()
+    db_path = tmp_path / "ledger.db"
+    calls = []
+
+    def post(url, headers=None, files=None, timeout=None):
+        calls.append(url)
+        return _FakeEvalResponse(200, dict(_VALID_DIARIZATION))
+
+    _patch_provider_path(monkeypatch, evaluate, post)
+    with pytest.raises(FileNotFoundError, match="c2"):
+        evaluate.run_evaluation(manifest, db_path=db_path)
+    assert calls == []
+    assert _ledger_rows(db_path) == []
